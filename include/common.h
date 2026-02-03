@@ -80,6 +80,11 @@
 #define ARRAYSIZE(a) (sizeof(a) / sizeof(a[0]))
 #endif
 
+// GUID_NULL fallback (usually defined in guiddef.h but just in case)
+#ifndef GUID_NULL
+static const GUID GUID_NULL = { 0, 0, 0, { 0, 0, 0, 0, 0, 0, 0, 0 } };
+#endif
+
 // Define credential provider field GUIDs if not available in SDK
 // These are defined in newer Windows SDKs (1903+)
 // Using inline const GUID to avoid initguid.h issues
