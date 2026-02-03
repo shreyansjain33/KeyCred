@@ -269,7 +269,6 @@ HRESULT WebAuthnHelper::GetAssertion(
     // Setup hmac-secret salt using SDK types (requires Windows 10 1903+ SDK)
     WEBAUTHN_HMAC_SECRET_SALT hmacSalt = { 0 };
     WEBAUTHN_HMAC_SECRET_SALT_VALUES hmacSaltValues = { 0 };
-    WEBAUTHN_CRED_WITH_HMAC_SECRET_SALT credWithSalt = { 0 };
     
     if (salt && salt->size() == 32) {
         // Setup the salt structure
@@ -278,21 +277,10 @@ HRESULT WebAuthnHelper::GetAssertion(
         hmacSalt.cbSecond = 0;
         hmacSalt.pbSecond = nullptr;
         
+        // Use global salt for all credentials (simpler and works across SDK versions)
         hmacSaltValues.pGlobalHmacSalt = &hmacSalt;
-        
-        // If we have a specific credential, associate salt with it
-        if (allowCredentialId && !allowCredentialId->empty()) {
-            // SDK uses nested Credential structure with cbId/pbId members
-            credWithSalt.Credential.dwVersion = WEBAUTHN_CREDENTIAL_CURRENT_VERSION;
-            credWithSalt.Credential.cbId = (DWORD)allowCredentialId->size();
-            credWithSalt.Credential.pbId = const_cast<BYTE*>(allowCredentialId->data());
-            credWithSalt.Credential.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
-            credWithSalt.pHmacSecretSalt = &hmacSalt;
-            
-            hmacSaltValues.cCredWithHmacSecretSaltList = 1;
-            hmacSaltValues.pCredWithHmacSecretSaltList = &credWithSalt;
-            hmacSaltValues.pGlobalHmacSalt = nullptr;  // Use per-credential salt instead
-        }
+        hmacSaltValues.cCredWithHmacSecretSaltList = 0;
+        hmacSaltValues.pCredWithHmacSecretSaltList = nullptr;
     }
 
     // Setup options
