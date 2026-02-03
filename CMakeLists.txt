@@ -62,6 +62,7 @@ target_link_libraries(TitanKeyCP PRIVATE
     webauthn
     bcrypt
     ncrypt
+    user32
 )
 
 # Set DLL properties

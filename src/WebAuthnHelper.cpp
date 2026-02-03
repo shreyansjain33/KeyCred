@@ -240,25 +240,30 @@ HRESULT WebAuthnHelper::GetAssertion(
         allowCredential.cbId = (DWORD)allowCredentialId->size();
         allowCredential.pbId = const_cast<BYTE*>(allowCredentialId->data());
         allowCredential.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
+        allowCredential.dwTransports = WEBAUTHN_CTAP_TRANSPORT_USB;  // Titan Key is USB
 
         allowCredentials.cCredentials = 1;
         allowCredentials.pCredentials = &allowCredential;
     }
 
-    // Setup options
+    // Setup options - use minimum necessary version for compatibility
     WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS options = { 0 };
-    options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION;
+    options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_1;  // Minimum version
     options.dwTimeoutMilliseconds = 60000;  // 60 seconds
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM;
     options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_DISCOURAGED;
-
+    
+    // Only set credential list if we have credentials to filter
     if (allowCredentialId && !allowCredentialId->empty()) {
         options.CredentialList = allowCredentials;
     }
 
-    // Generate cancellation ID
-    CoCreateGuid(&m_cancellationId);
-    options.pCancellationId = &m_cancellationId;
+    // Cancellation ID (available in version 2+)
+    if (m_apiVersion >= WEBAUTHN_API_VERSION_2) {
+        CoCreateGuid(&m_cancellationId);
+        options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_2;
+        options.pCancellationId = &m_cancellationId;
+    }
 
     // Call WebAuthn API
     PWEBAUTHN_ASSERTION pAssertion = nullptr;

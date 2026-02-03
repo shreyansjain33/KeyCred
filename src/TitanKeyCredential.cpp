@@ -94,7 +94,7 @@ HRESULT TitanKeyCredential::Initialize(
         }
     }
 
-    m_statusText = L"Touch your Titan Key to sign in";
+    m_statusText = L"Select to sign in with Titan Key";
 
     // Initialize WebAuthn
     HRESULT hr = m_webAuthn.Initialize();
@@ -179,8 +179,9 @@ IFACEMETHODIMP TitanKeyCredential::SetSelected(BOOL* pbAutoLogon) {
     TITAN_LOG(L"TitanKeyCredential::SetSelected");
 
     if (pbAutoLogon) {
-        // Auto-logon if already authenticated
-        *pbAutoLogon = m_authenticated;
+        // Auto-trigger authentication when tile is selected
+        // This causes Windows to call Connect() immediately
+        *pbAutoLogon = TRUE;
     }
 
     return S_OK;
@@ -226,7 +227,7 @@ IFACEMETHODIMP TitanKeyCredential::GetFieldState(
         *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
         break;
     case TKFI_SUBMIT_BUTTON:
-        *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+        *pcpfs = CPFS_HIDDEN;  // Hidden - auto-trigger on tile selection
         break;
     default:
         *pcpfs = CPFS_HIDDEN;
@@ -545,14 +546,26 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
     HRESULT hr = m_credentialStorage.GetCredential(m_userSid.c_str(), storedCred);
     if (FAILED(hr)) {
         TITAN_LOG_HR(L"No stored credential found", hr);
+        if (pqcws) pqcws->SetStatusMessage(L"No credential found. Run setup first.");
         return hr;
     }
 
+    TITAN_LOG(L"Credential loaded from storage");
+
     // Verify we have the required data
-    if (storedCred.credentialId.empty() || storedCred.publicKey.empty()) {
-        TITAN_LOG(L"Missing credential ID or public key - key not enrolled properly");
+    if (storedCred.credentialId.empty()) {
+        TITAN_LOG(L"Missing credential ID - key not enrolled properly");
+        if (pqcws) pqcws->SetStatusMessage(L"Missing credential ID. Re-run setup.");
         return E_FAIL;
     }
+
+    if (storedCred.encryptedPassword.empty()) {
+        TITAN_LOG(L"Missing encrypted password");
+        if (pqcws) pqcws->SetStatusMessage(L"Missing encrypted password. Re-run setup.");
+        return E_FAIL;
+    }
+
+    TITAN_LOG(L"Credential data verified");
 
     // Update status
     if (pqcws) {
@@ -568,9 +581,13 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
     }
 
     // Get assertion from Titan Key (user touches the key)
+    // At the lock screen (secure desktop), NULL lets Windows place the UI appropriately
+    HWND hWnd = NULL;
+    TITAN_LOG(L"Calling WebAuthn GetAssertion");
+
     WebAuthnHelper::AssertionResult assertion;
     hr = m_webAuthn.GetAssertion(
-        nullptr,  // No HWND in credential provider context
+        hWnd,
         storedCred.relyingPartyId.c_str(),
         challenge,
         &storedCred.credentialId,
@@ -578,8 +595,15 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
 
     if (FAILED(hr)) {
         TITAN_LOG_HR(L"GetAssertion failed", hr);
+        if (pqcws) {
+            std::wstring errMsg = L"Authentication failed: ";
+            errMsg += m_webAuthn.GetLastErrorDescription();
+            pqcws->SetStatusMessage(errMsg.c_str());
+        }
         return hr;
     }
+    
+    TITAN_LOG(L"GetAssertion succeeded - signature obtained");
 
     // Verify the signature using stored public key
     // This proves the user has the enrolled Titan Key
