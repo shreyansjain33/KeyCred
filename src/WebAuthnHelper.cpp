@@ -303,8 +303,9 @@ HRESULT WebAuthnHelper::GetAssertion(
         options.CredentialList = allowCredentials;
     }
 
-    // Add hmac-secret salt if provided
-    if (salt && salt->size() == 32) {
+    // Add hmac-secret salt if provided (requires API version 3+)
+    // Note: pHmacSecretSaltValues was added in WEBAUTHN API version 3 (Windows 10 1903+)
+    if (salt && salt->size() == 32 && m_apiVersion >= 3) {
         options.pHmacSecretSaltValues = &hmacSaltValues;
     }
 
@@ -363,9 +364,9 @@ HRESULT WebAuthnHelper::GetAssertion(
 
     result.usedTransport = pAssertion->dwUsedTransport;
 
-    // Extract hmac-secret result if available
+    // Extract hmac-secret result if available (requires API version 3+)
     result.hmacSecret.clear();
-    if (pAssertion->cbHmacSecret > 0 && pAssertion->pbHmacSecret) {
+    if (m_apiVersion >= 3 && pAssertion->cbHmacSecret > 0 && pAssertion->pbHmacSecret) {
         result.hmacSecret.assign(
             pAssertion->pbHmacSecret,
             pAssertion->pbHmacSecret + pAssertion->cbHmacSecret);
