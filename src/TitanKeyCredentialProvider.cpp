@@ -250,7 +250,8 @@ IFACEMETHODIMP TitanKeyCredentialProvider::GetCredentialAt(
     TitanKeyCredential* credential = m_credentials[dwIndex];
     if (credential) {
         credential->AddRef();
-        *ppcpc = credential;
+        *ppcpc = static_cast<ICredentialProviderCredential*>(
+            static_cast<ICredentialProviderCredential2*>(credential));
         return S_OK;
     }
 
