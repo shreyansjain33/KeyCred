@@ -6,7 +6,8 @@
 // WebAuthnHelper - Wrapper for Windows WebAuthn API (webauthn.dll)
 //
 // Provides methods for FIDO2/WebAuthn authentication with security keys
-// like the Google Titan Key.
+// like the Google Titan Key. Supports hmac-secret extension for deriving
+// encryption keys from the hardware key.
 //
 class WebAuthnHelper {
 public:
@@ -19,6 +20,7 @@ public:
         std::vector<BYTE> signature;
         std::vector<BYTE> userId;
         std::vector<BYTE> credentialId;
+        std::vector<BYTE> hmacSecret;      // 32-byte secret from hmac-secret extension
         DWORD usedTransport;
     };
 
@@ -28,6 +30,7 @@ public:
         std::vector<BYTE> publicKey;       // COSE public key
         std::vector<BYTE> attestationObject;
         DWORD usedTransport;
+        bool hmacSecretSupported;          // Whether the key supports hmac-secret
     };
 
     // Initialize WebAuthn - must be called before other operations
@@ -54,11 +57,13 @@ public:
         CredentialResult& result);
 
     // Get assertion (authentication)
+    // If salt is provided, hmac-secret extension is used to derive a 32-byte secret
     HRESULT GetAssertion(
         HWND hWnd,
         PCWSTR relyingPartyId,
         const std::vector<BYTE>& challenge,
         const std::vector<BYTE>* allowCredentialId,  // Optional: specific credential to use
+        const std::vector<BYTE>* salt,               // Optional: 32-byte salt for hmac-secret
         AssertionResult& result);
 
     // Verify assertion signature using stored public key

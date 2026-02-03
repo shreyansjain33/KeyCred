@@ -26,6 +26,14 @@
 #ifndef WEBAUTHN_API_VERSION_3
 #define WEBAUTHN_API_VERSION_3 3
 #endif
+#ifndef WEBAUTHN_API_VERSION_4
+#define WEBAUTHN_API_VERSION_4 4
+#endif
+
+// hmac-secret extension identifier
+#ifndef WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET
+#define WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET L"hmac-secret"
+#endif
 
 // HRESULT_FROM_NT may not be defined
 #ifndef HRESULT_FROM_NT

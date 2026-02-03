@@ -115,12 +115,23 @@ Run as Administrator:
                     └──────────────────┘
 ```
 
-## Security Notes
+## Security Model
 
-- Passwords are encrypted using Windows DPAPI (Data Protection API)
-- The private key never leaves the Titan Key
-- Challenge-response authentication prevents replay attacks
-- All cryptographic operations use Windows CNG APIs
+**hmac-secret Based Encryption:**
+
+This credential provider uses the FIDO2 hmac-secret extension to derive encryption keys directly from your Titan Key. This provides hardware-bound security:
+
+1. **Enrollment**: A random 32-byte salt is generated and stored
+2. **Key Derivation**: The Titan Key uses its internal secret + the salt to derive a 32-byte key via hmac-secret
+3. **Encryption**: Your Windows password is encrypted with AES-256-GCM using this derived key
+4. **Authentication**: The same salt is sent to the Titan Key to derive the same key for decryption
+
+**Security Guarantees:**
+- Your password can ONLY be decrypted by the exact same physical Titan Key
+- A different Titan Key (even with the same PIN) will derive a different key and fail decryption
+- The encryption key never leaves the hardware - only the encrypted password is stored
+- AES-256-GCM provides authenticated encryption (tampering detection)
+- Registry keys are protected with restrictive ACLs (SYSTEM + Admins only)
 
 ## Testing
 

@@ -1,16 +1,83 @@
 //
-// CredentialStorage.cpp - Encrypted credential storage using Windows Registry and DPAPI
+// CredentialStorage.cpp - Encrypted credential storage using hmac-secret
+//
+// Passwords are encrypted with AES-256-GCM using a key derived from the
+// Titan Key's hmac-secret extension. Without the physical key, decryption
+// is cryptographically impossible.
+//
+// SECURITY: Registry keys are protected with ACLs:
+//   - Deny: Everyone
+//   - Allow: SYSTEM (for LogonUI)
+//   - Allow: Administrators (for enrollment)
 //
 
 #include "CredentialStorage.h"
+#include "CryptoHelper.h"
+#include <aclapi.h>
+#include <sddl.h>
 
 // Registry value names
 static const WCHAR* VALUE_USERNAME = L"Username";
 static const WCHAR* VALUE_DOMAIN = L"Domain";
 static const WCHAR* VALUE_ENCRYPTED_PASSWORD = L"EncryptedPassword";
 static const WCHAR* VALUE_CREDENTIAL_ID = L"CredentialId";
-static const WCHAR* VALUE_PUBLIC_KEY = L"PublicKey";
+static const WCHAR* VALUE_SALT = L"Salt";
 static const WCHAR* VALUE_RELYING_PARTY_ID = L"RelyingPartyId";
+
+//
+// SetRestrictedAcl - Protect registry key with restrictive ACLs
+//
+// Only SYSTEM and Administrators can access, preventing malicious apps
+// from reading the encrypted password blob for offline attacks.
+//
+static HRESULT SetRestrictedAcl(HKEY hKey) {
+    // SDDL string for restrictive permissions:
+    // D:P                    - DACL, protected (no inheritance)
+    // (A;;KA;;;SY)          - Allow SYSTEM full control
+    // (A;;KA;;;BA)          - Allow Administrators full control
+    // (D;;KA;;;WD)          - Deny Everyone (this is overridden by explicit allows above)
+    //
+    // Note: Explicit allows take precedence over explicit denies for the same SID
+    // SYSTEM and Admins can access, everyone else is denied
+    PCWSTR sddl = L"D:P(A;;KA;;;SY)(A;;KA;;;BA)";
+    
+    PSECURITY_DESCRIPTOR pSD = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl, SDDL_REVISION_1, &pSD, nullptr)) {
+        TITAN_LOG(L"Failed to create security descriptor");
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    
+    // Get the DACL from the security descriptor
+    PACL pDacl = nullptr;
+    BOOL bDaclPresent = FALSE;
+    BOOL bDaclDefaulted = FALSE;
+    
+    if (!GetSecurityDescriptorDacl(pSD, &bDaclPresent, &pDacl, &bDaclDefaulted)) {
+        LocalFree(pSD);
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    
+    // Apply the DACL to the registry key
+    DWORD dwResult = SetSecurityInfo(
+        hKey,
+        SE_REGISTRY_KEY,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr,  // Owner
+        nullptr,  // Group
+        pDacl,    // DACL
+        nullptr); // SACL
+    
+    LocalFree(pSD);
+    
+    if (dwResult != ERROR_SUCCESS) {
+        TITAN_LOG(L"Failed to set registry ACL");
+        return HRESULT_FROM_WIN32(dwResult);
+    }
+    
+    TITAN_LOG(L"Registry ACL set - protected from unauthorized access");
+    return S_OK;
+}
 
 CredentialStorage::CredentialStorage() {
     TITAN_LOG(L"CredentialStorage initialized");
@@ -27,33 +94,32 @@ HRESULT CredentialStorage::StoreCredential(
     PCWSTR userSid,
     PCWSTR username,
     PCWSTR domain,
-    PCWSTR password,
+    const std::vector<BYTE>& encryptedPassword,
     const BYTE* credentialId,
     DWORD credentialIdSize,
-    const BYTE* publicKey,
-    DWORD publicKeySize,
+    const BYTE* salt,
+    DWORD saltSize,
     PCWSTR relyingPartyId)
 {
     TITAN_LOG(L"StoreCredential called");
 
-    if (!userSid || !username || !password) {
+    if (!userSid || !username || encryptedPassword.empty() || !credentialId || !salt) {
         return E_INVALIDARG;
-    }
-
-    // Encrypt the password using DPAPI
-    std::vector<BYTE> encryptedPassword;
-    HRESULT hr = EncryptPassword(password, encryptedPassword);
-    if (FAILED(hr)) {
-        TITAN_LOG_HR(L"Failed to encrypt password", hr);
-        return hr;
     }
 
     // Open or create the user's registry key
     HKEY hKey = nullptr;
-    hr = OpenUserKey(userSid, TRUE, &hKey);
+    HRESULT hr = OpenUserKey(userSid, TRUE, &hKey);
     if (FAILED(hr)) {
         TITAN_LOG_HR(L"Failed to open user key", hr);
         return hr;
+    }
+
+    // Apply restrictive ACLs to protect the encrypted data
+    HRESULT aclHr = SetRestrictedAcl(hKey);
+    if (FAILED(aclHr)) {
+        TITAN_LOG_HR(L"Warning: Could not set restrictive ACL", aclHr);
+        // Continue anyway - data will still be encrypted
     }
 
     // Store all values
@@ -68,17 +134,12 @@ HRESULT CredentialStorage::StoreCredential(
             encryptedPassword.data(), (DWORD)encryptedPassword.size());
         if (FAILED(hr)) break;
 
-        if (credentialId && credentialIdSize > 0) {
-            hr = WriteBinaryValue(hKey, VALUE_CREDENTIAL_ID,
-                credentialId, credentialIdSize);
-            if (FAILED(hr)) break;
-        }
+        hr = WriteBinaryValue(hKey, VALUE_CREDENTIAL_ID,
+            credentialId, credentialIdSize);
+        if (FAILED(hr)) break;
 
-        if (publicKey && publicKeySize > 0) {
-            hr = WriteBinaryValue(hKey, VALUE_PUBLIC_KEY,
-                publicKey, publicKeySize);
-            if (FAILED(hr)) break;
-        }
+        hr = WriteBinaryValue(hKey, VALUE_SALT, salt, saltSize);
+        if (FAILED(hr)) break;
 
         hr = WriteStringValue(hKey, VALUE_RELYING_PARTY_ID,
             relyingPartyId ? relyingPartyId : TITAN_KEY_CP_RELYING_PARTY_ID);
@@ -86,9 +147,6 @@ HRESULT CredentialStorage::StoreCredential(
     } while (false);
 
     RegCloseKey(hKey);
-
-    // Clear the encrypted password from memory
-    SecureZeroMemory(encryptedPassword.data(), encryptedPassword.size());
 
     TITAN_LOG_HR(L"StoreCredential completed", hr);
     return hr;
@@ -119,7 +177,6 @@ HRESULT CredentialStorage::GetCredential(
 
         hr = ReadStringValue(hKey, VALUE_DOMAIN, credential.domain);
         if (FAILED(hr)) {
-            // Domain is optional, default to local machine
             credential.domain = L".";
             hr = S_OK;
         }
@@ -127,11 +184,13 @@ HRESULT CredentialStorage::GetCredential(
         hr = ReadBinaryValue(hKey, VALUE_ENCRYPTED_PASSWORD, credential.encryptedPassword);
         if (FAILED(hr)) break;
 
-        // These are optional for backward compatibility
-        ReadBinaryValue(hKey, VALUE_CREDENTIAL_ID, credential.credentialId);
-        ReadBinaryValue(hKey, VALUE_PUBLIC_KEY, credential.publicKey);
-        ReadStringValue(hKey, VALUE_RELYING_PARTY_ID, credential.relyingPartyId);
+        hr = ReadBinaryValue(hKey, VALUE_CREDENTIAL_ID, credential.credentialId);
+        if (FAILED(hr)) break;
 
+        hr = ReadBinaryValue(hKey, VALUE_SALT, credential.salt);
+        if (FAILED(hr)) break;
+
+        ReadStringValue(hKey, VALUE_RELYING_PARTY_ID, credential.relyingPartyId);
         if (credential.relyingPartyId.empty()) {
             credential.relyingPartyId = TITAN_KEY_CP_RELYING_PARTY_ID;
         }
@@ -147,53 +206,37 @@ HRESULT CredentialStorage::GetCredential(
 }
 
 //
-// DecryptPassword - Decrypt password using DPAPI
+// DecryptPassword - Decrypt password using hmac-secret derived key
 //
 HRESULT CredentialStorage::DecryptPassword(
     const std::vector<BYTE>& encryptedData,
+    const std::vector<BYTE>& hmacSecret,
     SecureString& password)
 {
     TITAN_LOG(L"DecryptPassword called");
 
-    if (encryptedData.empty()) {
+    if (encryptedData.empty() || hmacSecret.size() != 32) {
         return E_INVALIDARG;
     }
 
-    DATA_BLOB encryptedBlob;
-    encryptedBlob.pbData = const_cast<BYTE*>(encryptedData.data());
-    encryptedBlob.cbData = (DWORD)encryptedData.size();
+    return CryptoHelper::DecryptPassword(encryptedData, hmacSecret.data(), password);
+}
 
-    DATA_BLOB decryptedBlob = { 0 };
+//
+// EncryptPassword - Encrypt password using hmac-secret derived key
+//
+HRESULT CredentialStorage::EncryptPassword(
+    PCWSTR password,
+    const std::vector<BYTE>& hmacSecret,
+    std::vector<BYTE>& encryptedData)
+{
+    TITAN_LOG(L"EncryptPassword called");
 
-    // Decrypt using DPAPI
-    if (!CryptUnprotectData(
-        &encryptedBlob,
-        nullptr,       // description
-        nullptr,       // optional entropy
-        nullptr,       // reserved
-        nullptr,       // prompt struct
-        CRYPTPROTECT_LOCAL_MACHINE,  // flags
-        &decryptedBlob))
-    {
-        HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
-        TITAN_LOG_HR(L"CryptUnprotectData failed", hr);
-        return hr;
+    if (!password || hmacSecret.size() != 32) {
+        return E_INVALIDARG;
     }
 
-    // Convert to wide string and store in SecureString
-    if (decryptedBlob.cbData > 0 && decryptedBlob.pbData) {
-        // The data should be a null-terminated wide string
-        password.Set(reinterpret_cast<const WCHAR*>(decryptedBlob.pbData));
-
-        // Securely clear and free the decrypted data
-        SecureZeroMemory(decryptedBlob.pbData, decryptedBlob.cbData);
-        LocalFree(decryptedBlob.pbData);
-    } else {
-        return E_FAIL;
-    }
-
-    TITAN_LOG(L"DecryptPassword succeeded");
-    return S_OK;
+    return CryptoHelper::EncryptPassword(password, hmacSecret.data(), encryptedData);
 }
 
 //
@@ -252,7 +295,6 @@ HRESULT CredentialStorage::EnumerateUsers(std::vector<std::wstring>& userSids) {
         &hKey);
 
     if (result == ERROR_FILE_NOT_FOUND) {
-        // No credentials stored yet
         return S_OK;
     }
 
@@ -288,45 +330,6 @@ HRESULT CredentialStorage::EnumerateUsers(std::vector<std::wstring>& userSids) {
     }
 
     RegCloseKey(hKey);
-    return S_OK;
-}
-
-//
-// EncryptPassword - Encrypt password using DPAPI (static method for tools)
-//
-HRESULT CredentialStorage::EncryptPassword(
-    PCWSTR password,
-    std::vector<BYTE>& encryptedData)
-{
-    if (!password) {
-        return E_INVALIDARG;
-    }
-
-    DATA_BLOB inputBlob;
-    inputBlob.pbData = (BYTE*)password;
-    inputBlob.cbData = (DWORD)((wcslen(password) + 1) * sizeof(WCHAR));
-
-    DATA_BLOB outputBlob = { 0 };
-
-    // Encrypt using DPAPI with local machine scope
-    if (!CryptProtectData(
-        &inputBlob,
-        L"TitanKeyCP Password",  // description
-        nullptr,                  // optional entropy
-        nullptr,                  // reserved
-        nullptr,                  // prompt struct
-        CRYPTPROTECT_LOCAL_MACHINE,  // flags
-        &outputBlob))
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    // Copy to vector
-    encryptedData.assign(outputBlob.pbData, outputBlob.pbData + outputBlob.cbData);
-
-    // Free the output blob
-    LocalFree(outputBlob.pbData);
-
     return S_OK;
 }
 

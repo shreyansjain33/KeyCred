@@ -8,6 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(WIN32)
     add_definitions(-DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+    
+    # Use static runtime to avoid VCRUNTIME DLL dependency
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # Source files
@@ -17,6 +20,7 @@ set(SOURCES
     src/TitanKeyCredential.cpp
     src/WebAuthnHelper.cpp
     src/CredentialStorage.cpp
+    src/CryptoHelper.cpp
 )
 
 set(HEADERS
@@ -25,6 +29,7 @@ set(HEADERS
     src/TitanKeyCredential.h
     src/WebAuthnHelper.h
     src/CredentialStorage.h
+    src/CryptoHelper.h
     src/resource.h
     include/common.h
 )
@@ -70,6 +75,7 @@ add_executable(TestTitanKeyCP
     src/TestTitanKeyCP.cpp
     src/CredentialStorage.cpp
     src/WebAuthnHelper.cpp
+    src/CryptoHelper.cpp
 )
 
 target_include_directories(TestTitanKeyCP PRIVATE

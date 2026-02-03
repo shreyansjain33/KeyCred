@@ -527,6 +527,9 @@ IFACEMETHODIMP TitanKeyCredential::Disconnect() {
 //
 // PerformAuthentication - Execute WebAuthn authentication and retrieve password
 //
+// Uses the hmac-secret extension to derive the decryption key from the Titan Key.
+// The password can ONLY be decrypted by the same physical key used during enrollment.
+//
 HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcws) {
     TITAN_LOG(L"TitanKeyCredential::PerformAuthentication");
 
@@ -543,6 +546,12 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
         return hr;
     }
 
+    // Verify we have the required data
+    if (storedCred.credentialId.empty() || storedCred.salt.empty()) {
+        TITAN_LOG(L"Missing credential ID or salt - key not enrolled properly");
+        return E_FAIL;
+    }
+
     // Update status
     if (pqcws) {
         pqcws->SetStatusMessage(L"Waiting for security key...");
@@ -556,13 +565,15 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
         return hr;
     }
 
-    // Get assertion from Titan Key
+    // Get assertion from Titan Key with hmac-secret
+    // Pass the stored salt to derive the same secret used during enrollment
     WebAuthnHelper::AssertionResult assertion;
     hr = m_webAuthn.GetAssertion(
         nullptr,  // No HWND in credential provider context
         storedCred.relyingPartyId.c_str(),
         challenge,
-        storedCred.credentialId.empty() ? nullptr : &storedCred.credentialId,
+        &storedCred.credentialId,
+        &storedCred.salt,  // Salt for hmac-secret extension
         assertion);
 
     if (FAILED(hr)) {
@@ -570,27 +581,26 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
         return hr;
     }
 
-    // Verify the assertion signature if we have a public key
-    if (!storedCred.publicKey.empty()) {
-        // Compute client data hash for verification
-        std::vector<BYTE> clientDataHash(32);
-        // Note: In production, this should use the actual client data hash
-        // For now, we trust the Windows WebAuthn API verification
-
-        // Optionally verify signature
-        // hr = WebAuthnHelper::VerifyAssertion(
-        //     storedCred.publicKey,
-        //     assertion.authenticatorData,
-        //     clientDataHash,
-        //     assertion.signature);
+    // Verify we got the hmac-secret
+    if (assertion.hmacSecret.empty() || assertion.hmacSecret.size() != 32) {
+        TITAN_LOG(L"hmac-secret not returned - key may not support this extension");
+        return E_FAIL;
     }
 
     if (pqcws) {
         pqcws->SetStatusMessage(L"Decrypting credentials...");
     }
 
-    // Decrypt the password
-    hr = m_credentialStorage.DecryptPassword(storedCred.encryptedPassword, m_password);
+    // Decrypt the password using the hmac-secret as the key
+    // This will ONLY work with the exact same Titan Key that was used for enrollment
+    hr = CredentialStorage::DecryptPassword(
+        storedCred.encryptedPassword,
+        assertion.hmacSecret,
+        m_password);
+
+    // Securely clear the hmac-secret
+    SecureZeroMemory(assertion.hmacSecret.data(), assertion.hmacSecret.size());
+
     if (FAILED(hr)) {
         TITAN_LOG_HR(L"Failed to decrypt password", hr);
         return hr;
