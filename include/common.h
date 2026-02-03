@@ -1,0 +1,133 @@
+#pragma once
+
+// Windows headers
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <windows.h>
+#include <wincred.h>
+#include <ntsecapi.h>
+#include <credentialprovider.h>
+#include <webauthn.h>
+#include <wincrypt.h>
+#include <bcrypt.h>
+#include <sddl.h>
+
+// Standard library
+#include <string>
+#include <vector>
+#include <memory>
+#include <stdexcept>
+
+// Utility macros
+#define SAFE_RELEASE(p) if ((p)) { (p)->Release(); (p) = nullptr; }
+#define ARRAYSIZE(a) (sizeof(a) / sizeof(a[0]))
+
+// Registry paths
+#define TITAN_KEY_CP_REGISTRY_PATH L"SOFTWARE\\TitanKeyCP\\Credentials"
+#define TITAN_KEY_CP_RELYING_PARTY_ID L"windows.local"
+
+// Credential provider constants
+#define TITAN_KEY_CP_TILE_IMAGE 100
+#define MAX_USERNAME_LENGTH 256
+#define MAX_PASSWORD_LENGTH 256
+#define MAX_DOMAIN_LENGTH 256
+
+// Field IDs for credential tile
+enum TITAN_KEY_FIELD_ID {
+    TKFI_TILEIMAGE = 0,
+    TKFI_LABEL = 1,
+    TKFI_USERNAME = 2,
+    TKFI_STATUS = 3,
+    TKFI_SUBMIT_BUTTON = 4,
+    TKFI_NUM_FIELDS = 5
+};
+
+// Debug logging (disabled in release)
+#ifdef _DEBUG
+#define TITAN_LOG(msg) OutputDebugStringW(L"[TitanKeyCP] " msg L"\n")
+#define TITAN_LOG_HR(msg, hr) { \
+    WCHAR _buf[512]; \
+    swprintf_s(_buf, L"[TitanKeyCP] " msg L" HR=0x%08X\n", hr); \
+    OutputDebugStringW(_buf); \
+}
+#else
+#define TITAN_LOG(msg)
+#define TITAN_LOG_HR(msg, hr)
+#endif
+
+// Helper class for COM reference counting
+template<typename T>
+class ComPtr {
+public:
+    ComPtr() : m_ptr(nullptr) {}
+    ComPtr(T* ptr) : m_ptr(ptr) { if (m_ptr) m_ptr->AddRef(); }
+    ComPtr(const ComPtr& other) : m_ptr(other.m_ptr) { if (m_ptr) m_ptr->AddRef(); }
+    ComPtr(ComPtr&& other) noexcept : m_ptr(other.m_ptr) { other.m_ptr = nullptr; }
+    ~ComPtr() { if (m_ptr) m_ptr->Release(); }
+
+    ComPtr& operator=(const ComPtr& other) {
+        if (this != &other) {
+            if (m_ptr) m_ptr->Release();
+            m_ptr = other.m_ptr;
+            if (m_ptr) m_ptr->AddRef();
+        }
+        return *this;
+    }
+
+    ComPtr& operator=(ComPtr&& other) noexcept {
+        if (this != &other) {
+            if (m_ptr) m_ptr->Release();
+            m_ptr = other.m_ptr;
+            other.m_ptr = nullptr;
+        }
+        return *this;
+    }
+
+    T* operator->() const { return m_ptr; }
+    T** operator&() { return &m_ptr; }
+    T* Get() const { return m_ptr; }
+    void Reset() { if (m_ptr) { m_ptr->Release(); m_ptr = nullptr; } }
+
+    void Attach(T* ptr) {
+        if (m_ptr) m_ptr->Release();
+        m_ptr = ptr;
+    }
+
+    T* Detach() {
+        T* ptr = m_ptr;
+        m_ptr = nullptr;
+        return ptr;
+    }
+
+private:
+    T* m_ptr;
+};
+
+// Secure string helper for password handling
+class SecureString {
+public:
+    SecureString() = default;
+    explicit SecureString(const std::wstring& str) : m_data(str) {}
+    ~SecureString() { Clear(); }
+
+    void Clear() {
+        if (!m_data.empty()) {
+            SecureZeroMemory(&m_data[0], m_data.size() * sizeof(wchar_t));
+            m_data.clear();
+        }
+    }
+
+    void Set(const wchar_t* str) {
+        Clear();
+        if (str) m_data = str;
+    }
+
+    const wchar_t* Get() const { return m_data.c_str(); }
+    size_t Length() const { return m_data.length(); }
+    bool Empty() const { return m_data.empty(); }
+
+private:
+    std::wstring m_data;
+};
