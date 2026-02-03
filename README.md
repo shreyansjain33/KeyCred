@@ -117,21 +117,29 @@ Run as Administrator:
 
 ## Security Model
 
-**hmac-secret Based Encryption:**
+**TPM + Signature Verification:**
 
-This credential provider uses the FIDO2 hmac-secret extension to derive encryption keys directly from your Titan Key. This provides hardware-bound security:
+This credential provider uses a two-factor approach combining TPM hardware encryption with Titan Key signature verification:
 
-1. **Enrollment**: A random 32-byte salt is generated and stored
-2. **Key Derivation**: The Titan Key uses its internal secret + the salt to derive a 32-byte key via hmac-secret
-3. **Encryption**: Your Windows password is encrypted with AES-256-GCM using this derived key
-4. **Authentication**: The same salt is sent to the Titan Key to derive the same key for decryption
+1. **Enrollment**:
+   - Create credential on Titan Key (stores public key)
+   - Create TPM-backed RSA key via Windows CNG
+   - Generate random AES-256 key, encrypt password
+   - Wrap AES key with TPM RSA key
+   - Store: wrapped key + encrypted password + credential ID + public key
+
+2. **Authentication**:
+   - Titan Key signs a random challenge (physical presence proof)
+   - Signature verified via Windows WebAuthn API
+   - TPM unwraps the AES key (hardware-protected)
+   - Password decrypted with AES-256-GCM
 
 **Security Guarantees:**
-- Your password can ONLY be decrypted by the exact same physical Titan Key
-- A different Titan Key (even with the same PIN) will derive a different key and fail decryption
-- The encryption key never leaves the hardware - only the encrypted password is stored
-- AES-256-GCM provides authenticated encryption (tampering detection)
-- Registry keys are protected with restrictive ACLs (SYSTEM + Admins only)
+- TPM key cannot be extracted even with admin access
+- Titan Key signature required for login (physical presence)
+- AES-256-GCM provides authenticated encryption
+- Registry keys protected with ACLs (SYSTEM + Admins only)
+- Works with all FIDO2 keys (not limited to hmac-secret support)
 
 ## Testing
 

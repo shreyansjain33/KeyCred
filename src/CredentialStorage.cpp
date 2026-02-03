@@ -1,18 +1,11 @@
 //
-// CredentialStorage.cpp - Encrypted credential storage using hmac-secret
+// CredentialStorage.cpp - Encrypted credential storage
 //
-// Passwords are encrypted with AES-256-GCM using a key derived from the
-// Titan Key's hmac-secret extension. Without the physical key, decryption
-// is cryptographically impossible.
-//
-// SECURITY: Registry keys are protected with ACLs:
-//   - Deny: Everyone
-//   - Allow: SYSTEM (for LogonUI)
-//   - Allow: Administrators (for enrollment)
+// Stores credentials encrypted with TPM-backed keys.
+// Registry keys are protected with ACLs (SYSTEM + Admins only).
 //
 
 #include "CredentialStorage.h"
-#include "CryptoHelper.h"
 #include <aclapi.h>
 #include <sddl.h>
 
@@ -21,34 +14,21 @@ static const WCHAR* VALUE_USERNAME = L"Username";
 static const WCHAR* VALUE_DOMAIN = L"Domain";
 static const WCHAR* VALUE_ENCRYPTED_PASSWORD = L"EncryptedPassword";
 static const WCHAR* VALUE_CREDENTIAL_ID = L"CredentialId";
-static const WCHAR* VALUE_SALT = L"Salt";
+static const WCHAR* VALUE_PUBLIC_KEY = L"PublicKey";
 static const WCHAR* VALUE_RELYING_PARTY_ID = L"RelyingPartyId";
 
 //
 // SetRestrictedAcl - Protect registry key with restrictive ACLs
 //
-// Only SYSTEM and Administrators can access, preventing malicious apps
-// from reading the encrypted password blob for offline attacks.
-//
 static HRESULT SetRestrictedAcl(HKEY hKey) {
-    // SDDL string for restrictive permissions:
-    // D:P                    - DACL, protected (no inheritance)
-    // (A;;KA;;;SY)          - Allow SYSTEM full control
-    // (A;;KA;;;BA)          - Allow Administrators full control
-    // (D;;KA;;;WD)          - Deny Everyone (this is overridden by explicit allows above)
-    //
-    // Note: Explicit allows take precedence over explicit denies for the same SID
-    // SYSTEM and Admins can access, everyone else is denied
     PCWSTR sddl = L"D:P(A;;KA;;;SY)(A;;KA;;;BA)";
     
     PSECURITY_DESCRIPTOR pSD = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl, SDDL_REVISION_1, &pSD, nullptr)) {
-        TITAN_LOG(L"Failed to create security descriptor");
         return HRESULT_FROM_WIN32(GetLastError());
     }
     
-    // Get the DACL from the security descriptor
     PACL pDacl = nullptr;
     BOOL bDaclPresent = FALSE;
     BOOL bDaclDefaulted = FALSE;
@@ -58,20 +38,15 @@ static HRESULT SetRestrictedAcl(HKEY hKey) {
         return HRESULT_FROM_WIN32(GetLastError());
     }
     
-    // Apply the DACL to the registry key
     DWORD dwResult = SetSecurityInfo(
         hKey,
         SE_REGISTRY_KEY,
         DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-        nullptr,  // Owner
-        nullptr,  // Group
-        pDacl,    // DACL
-        nullptr); // SACL
+        nullptr, nullptr, pDacl, nullptr);
     
     LocalFree(pSD);
     
     if (dwResult != ERROR_SUCCESS) {
-        TITAN_LOG(L"Failed to set registry ACL");
         return HRESULT_FROM_WIN32(dwResult);
     }
     
@@ -97,17 +72,16 @@ HRESULT CredentialStorage::StoreCredential(
     const std::vector<BYTE>& encryptedPassword,
     const BYTE* credentialId,
     DWORD credentialIdSize,
-    const BYTE* salt,
-    DWORD saltSize,
+    const BYTE* publicKey,
+    DWORD publicKeySize,
     PCWSTR relyingPartyId)
 {
     TITAN_LOG(L"StoreCredential called");
 
-    if (!userSid || !username || encryptedPassword.empty() || !credentialId || !salt) {
+    if (!userSid || !username || encryptedPassword.empty() || !credentialId || !publicKey) {
         return E_INVALIDARG;
     }
 
-    // Open or create the user's registry key
     HKEY hKey = nullptr;
     HRESULT hr = OpenUserKey(userSid, TRUE, &hKey);
     if (FAILED(hr)) {
@@ -115,14 +89,9 @@ HRESULT CredentialStorage::StoreCredential(
         return hr;
     }
 
-    // Apply restrictive ACLs to protect the encrypted data
-    HRESULT aclHr = SetRestrictedAcl(hKey);
-    if (FAILED(aclHr)) {
-        TITAN_LOG_HR(L"Warning: Could not set restrictive ACL", aclHr);
-        // Continue anyway - data will still be encrypted
-    }
+    // Apply restrictive ACLs
+    SetRestrictedAcl(hKey);
 
-    // Store all values
     do {
         hr = WriteStringValue(hKey, VALUE_USERNAME, username);
         if (FAILED(hr)) break;
@@ -138,7 +107,8 @@ HRESULT CredentialStorage::StoreCredential(
             credentialId, credentialIdSize);
         if (FAILED(hr)) break;
 
-        hr = WriteBinaryValue(hKey, VALUE_SALT, salt, saltSize);
+        hr = WriteBinaryValue(hKey, VALUE_PUBLIC_KEY,
+            publicKey, publicKeySize);
         if (FAILED(hr)) break;
 
         hr = WriteStringValue(hKey, VALUE_RELYING_PARTY_ID,
@@ -187,7 +157,7 @@ HRESULT CredentialStorage::GetCredential(
         hr = ReadBinaryValue(hKey, VALUE_CREDENTIAL_ID, credential.credentialId);
         if (FAILED(hr)) break;
 
-        hr = ReadBinaryValue(hKey, VALUE_SALT, credential.salt);
+        hr = ReadBinaryValue(hKey, VALUE_PUBLIC_KEY, credential.publicKey);
         if (FAILED(hr)) break;
 
         ReadStringValue(hKey, VALUE_RELYING_PARTY_ID, credential.relyingPartyId);
@@ -203,40 +173,6 @@ HRESULT CredentialStorage::GetCredential(
 
     TITAN_LOG_HR(L"GetCredential completed", hr);
     return hr;
-}
-
-//
-// DecryptPassword - Decrypt password using hmac-secret derived key
-//
-HRESULT CredentialStorage::DecryptPassword(
-    const std::vector<BYTE>& encryptedData,
-    const std::vector<BYTE>& hmacSecret,
-    SecureString& password)
-{
-    TITAN_LOG(L"DecryptPassword called");
-
-    if (encryptedData.empty() || hmacSecret.size() != 32) {
-        return E_INVALIDARG;
-    }
-
-    return CryptoHelper::DecryptPassword(encryptedData, hmacSecret.data(), password);
-}
-
-//
-// EncryptPassword - Encrypt password using hmac-secret derived key
-//
-HRESULT CredentialStorage::EncryptPassword(
-    PCWSTR password,
-    const std::vector<BYTE>& hmacSecret,
-    std::vector<BYTE>& encryptedData)
-{
-    TITAN_LOG(L"EncryptPassword called");
-
-    if (!password || hmacSecret.size() != 32) {
-        return E_INVALIDARG;
-    }
-
-    return CryptoHelper::EncryptPassword(password, hmacSecret.data(), encryptedData);
 }
 
 //
@@ -313,10 +249,7 @@ HRESULT CredentialStorage::EnumerateUsers(std::vector<std::wstring>& userSids) {
             index++,
             subKeyName,
             &subKeyNameSize,
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr);
+            nullptr, nullptr, nullptr, nullptr);
 
         if (result == ERROR_NO_MORE_ITEMS) {
             break;
@@ -352,8 +285,7 @@ HRESULT CredentialStorage::OpenUserKey(PCWSTR userSid, BOOL createIfMissing, HKE
         result = RegCreateKeyExW(
             HKEY_LOCAL_MACHINE,
             keyPath.c_str(),
-            0,
-            nullptr,
+            0, nullptr,
             REG_OPTION_NON_VOLATILE,
             KEY_READ | KEY_WRITE,
             nullptr,

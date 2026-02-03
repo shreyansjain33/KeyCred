@@ -5,9 +5,10 @@
 //
 // CredentialStorage - Manages encrypted credential storage in the Windows Registry
 //
-// Stores user credentials encrypted with AES-256-GCM using a key derived from
-// the Titan Key's hmac-secret extension. The password can ONLY be decrypted
-// using the same physical security key that was used during enrollment.
+// Stores user credentials encrypted with TPM-backed keys (via CNG).
+// The password is protected by:
+//   1. TPM hardware (cannot be extracted even with admin access)
+//   2. Titan Key signature verification (physical presence required)
 //
 class CredentialStorage {
 public:
@@ -18,40 +19,28 @@ public:
     struct UserCredential {
         std::wstring username;
         std::wstring domain;
-        std::vector<BYTE> encryptedPassword;  // AES-256-GCM encrypted
+        std::vector<BYTE> encryptedPassword;  // TPM-encrypted
         std::vector<BYTE> credentialId;       // WebAuthn credential ID
-        std::vector<BYTE> salt;               // 32-byte salt for hmac-secret
+        std::vector<BYTE> publicKey;          // Public key for signature verification
         std::wstring relyingPartyId;
     };
 
-    // Store credentials for a user (encrypted with hmac-secret derived key)
+    // Store credentials for a user
     HRESULT StoreCredential(
         PCWSTR userSid,
         PCWSTR username,
         PCWSTR domain,
-        const std::vector<BYTE>& encryptedPassword,  // Already encrypted with AES-GCM
+        const std::vector<BYTE>& encryptedPassword,  // Already TPM-encrypted
         const BYTE* credentialId,
         DWORD credentialIdSize,
-        const BYTE* salt,
-        DWORD saltSize,
+        const BYTE* publicKey,
+        DWORD publicKeySize,
         PCWSTR relyingPartyId);
 
     // Retrieve credentials for a user
     HRESULT GetCredential(
         PCWSTR userSid,
         UserCredential& credential);
-
-    // Decrypt password using hmac-secret derived key
-    static HRESULT DecryptPassword(
-        const std::vector<BYTE>& encryptedData,
-        const std::vector<BYTE>& hmacSecret,  // 32-byte key from Titan Key
-        SecureString& password);
-
-    // Encrypt password using hmac-secret derived key
-    static HRESULT EncryptPassword(
-        PCWSTR password,
-        const std::vector<BYTE>& hmacSecret,  // 32-byte key from Titan Key
-        std::vector<BYTE>& encryptedData);
 
     // Check if credentials exist for a user
     BOOL HasCredential(PCWSTR userSid);

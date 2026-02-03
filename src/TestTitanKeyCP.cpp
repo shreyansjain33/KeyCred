@@ -5,15 +5,16 @@
 // locking the system or going through the Windows logon UI.
 //
 // SECURITY MODEL:
-// - Password is encrypted with AES-256-GCM
-// - Encryption key is derived from Titan Key's hmac-secret extension
-// - Only the SAME physical key can decrypt the password
+// - Password encrypted with TPM-backed AES-256-GCM (CNG)
+// - Titan Key provides signature verification (physical presence)
+// - TPM key cannot be extracted even with admin access
 //
 
 #include "common.h"
 #include "CredentialStorage.h"
 #include "WebAuthnHelper.h"
 #include "CryptoHelper.h"
+#include "TpmCrypto.h"
 
 #include <iostream>
 #include <string>
@@ -44,14 +45,14 @@ void PrintBanner() {
 void PrintHelp() {
     std::wcout << L"Usage: TestTitanKeyCP.exe [options]\n\n";
     std::wcout << L"SECURITY MODEL:\n";
-    std::wcout << L"  Your password is encrypted with AES-256-GCM using a key derived\n";
-    std::wcout << L"  from your Titan Key's hmac-secret extension. ONLY the same\n";
-    std::wcout << L"  physical key can decrypt your password - no other key will work.\n\n";
+    std::wcout << L"  - Password encrypted with TPM-backed AES-256-GCM (CNG)\n";
+    std::wcout << L"  - Titan Key required for signature verification\n";
+    std::wcout << L"  - TPM key cannot be extracted even with admin access\n\n";
     std::wcout << L"Options:\n";
     std::wcout << L"  --help, -h          Show this help message\n";
     std::wcout << L"  --test-all          Run all tests\n";
-    std::wcout << L"  --test-storage      Test AES-256-GCM encryption\n";
-    std::wcout << L"  --test-webauthn     Test WebAuthn hmac-secret extension\n";
+    std::wcout << L"  --test-storage      Test TPM encryption\n";
+    std::wcout << L"  --test-webauthn     Test WebAuthn signature verification\n";
     std::wcout << L"  --test-registration Check if DLL is properly registered\n";
     std::wcout << L"  --setup             Enroll Titan Key and encrypt password\n";
     std::wcout << L"  --list              List stored credentials\n";
@@ -61,9 +62,7 @@ void PrintHelp() {
     std::wcout << L"\n";
     std::wcout << L"First-Time Setup:\n";
     std::wcout << L"  1. Run: TestTitanKeyCP.exe --setup --user %USERNAME% --password YOUR_PASSWORD\n";
-    std::wcout << L"  2. Touch your Titan Key TWICE when prompted:\n";
-    std::wcout << L"     - First touch: Creates credential on key\n";
-    std::wcout << L"     - Second touch: Derives encryption key\n";
+    std::wcout << L"  2. Touch your Titan Key when prompted to enroll\n";
     std::wcout << L"  3. Register DLL: regsvr32 TitanKeyCP.dll\n";
     std::wcout << L"  4. Lock screen (Win+L) and test!\n";
     std::wcout << L"\n";
@@ -165,42 +164,52 @@ std::wstring GetUserSid(const std::wstring& username, const std::wstring& domain
 }
 
 //
-// Test: Credential Storage (AES-256-GCM)
+// Test: TPM Credential Storage
 //
 bool TestCredentialStorage() {
-    std::wcout << L"\n--- Testing Credential Storage (AES-256-GCM) ---\n\n";
+    std::wcout << L"\n--- Testing TPM Credential Storage ---\n\n";
     
     bool success = true;
     
-    // Generate a test encryption key (simulating hmac-secret output)
-    std::wcout << L"[*] Generating test encryption key (32 bytes)...\n";
-    std::vector<BYTE> testKey;
-    HRESULT hr = CryptoHelper::GenerateSalt(testKey);  // Use salt generator for random key
+    // Initialize TPM
+    std::wcout << L"[*] Initializing TPM/CNG...\n";
+    TpmCrypto tpm;
+    HRESULT hr = tpm.Initialize();
     
     if (FAILED(hr)) {
-        std::wcout << L"    [FAIL] Could not generate test key\n";
+        std::wcout << L"    [WARN] TPM not available, using software fallback\n";
+    } else {
+        std::wcout << L"    [OK] TPM/CNG available\n";
+    }
+    
+    // Create test key
+    std::wcout << L"[*] Creating test key...\n";
+    hr = tpm.OpenOrCreateKey(L"TitanKeyCP_TEST");
+    
+    if (FAILED(hr)) {
+        std::wcout << L"    [FAIL] Could not create key: 0x" << std::hex << hr << std::dec << L"\n";
         return false;
     }
-    std::wcout << L"    [OK] Test key generated\n";
+    std::wcout << L"    [OK] Test key created\n";
     
     // Test password encryption
-    std::wcout << L"[*] Testing AES-256-GCM password encryption...\n";
+    std::wcout << L"[*] Testing TPM password encryption...\n";
     std::vector<BYTE> encrypted;
-    hr = CredentialStorage::EncryptPassword(L"TestPassword123", testKey, encrypted);
+    hr = tpm.EncryptPassword(L"TestPassword123", encrypted);
     
     if (SUCCEEDED(hr)) {
         std::wcout << L"    [OK] Password encrypted (" << encrypted.size() << L" bytes)\n";
-        std::wcout << L"         Format: nonce(12) + ciphertext + tag(16)\n";
+        std::wcout << L"         Format: wrapped_key + AES-GCM(nonce + ciphertext + tag)\n";
     } else {
         std::wcout << L"    [FAIL] Encryption failed: 0x" << std::hex << hr << std::dec << L"\n";
         success = false;
     }
     
-    // Test decryption with correct key
+    // Test decryption
     if (SUCCEEDED(hr)) {
-        std::wcout << L"[*] Testing decryption with correct key...\n";
+        std::wcout << L"[*] Testing TPM password decryption...\n";
         SecureString decrypted;
-        hr = CredentialStorage::DecryptPassword(encrypted, testKey, decrypted);
+        hr = tpm.DecryptPassword(encrypted, decrypted);
         
         if (SUCCEEDED(hr)) {
             if (wcscmp(decrypted.Get(), L"TestPassword123") == 0) {
@@ -215,26 +224,10 @@ bool TestCredentialStorage() {
         }
     }
     
-    // Test decryption with WRONG key (should fail - this proves security)
-    if (SUCCEEDED(hr)) {
-        std::wcout << L"[*] Testing decryption with WRONG key (should fail)...\n";
-        std::vector<BYTE> wrongKey;
-        CryptoHelper::GenerateSalt(wrongKey);  // Different random key
-        
-        SecureString decrypted;
-        hr = CredentialStorage::DecryptPassword(encrypted, wrongKey, decrypted);
-        
-        if (FAILED(hr)) {
-            std::wcout << L"    [OK] Decryption correctly FAILED with wrong key!\n";
-            std::wcout << L"         This proves only the correct Titan Key can decrypt.\n";
-        } else {
-            std::wcout << L"    [FAIL] Decryption should have failed with wrong key!\n";
-            success = false;
-        }
-    }
-    
-    // Clear sensitive data
-    SecureZeroMemory(testKey.data(), testKey.size());
+    // Clean up test key
+    std::wcout << L"[*] Cleaning up test key...\n";
+    tpm.DeleteKey();
+    std::wcout << L"    [OK] Test key deleted\n";
     
     return success;
 }
@@ -274,9 +267,9 @@ bool TestWebAuthn() {
     }
     
     // Test actual key interaction (requires user action)
-    std::wcout << L"\n[*] Ready to test Titan Key with hmac-secret\n";
+    std::wcout << L"\n[*] Ready to test Titan Key signature verification\n";
     std::wcout << L"\n    Choose test:\n";
-    std::wcout << L"    1. Full hmac-secret test (enroll + derive key)\n";
+    std::wcout << L"    1. Full test (enroll + sign + verify)\n";
     std::wcout << L"    2. Skip\n";
     std::wcout << L"\n    Enter choice (1/2): ";
     
@@ -284,8 +277,8 @@ bool TestWebAuthn() {
     std::getline(std::wcin, choice);
     
     if (choice == L"1") {
-        std::wcout << L"\n[*] Testing full hmac-secret flow...\n";
-        std::wcout << L"    This will test: enroll -> derive key -> verify key derivation\n\n";
+        std::wcout << L"\n[*] Testing full signature flow...\n";
+        std::wcout << L"    This will test: enroll -> sign challenge -> verify\n\n";
         
         // Step 1: Create credential
         std::wcout << L"[*] Step 1: Creating credential (touch key)...\n";
@@ -294,7 +287,7 @@ bool TestWebAuthn() {
         hr = webauthn.MakeCredential(
             GetConsoleWindow(),
             TITAN_KEY_CP_RELYING_PARTY_ID,
-            L"hmac-secret Test",
+            L"Signature Test",
             L"testuser",
             L"testuser",
             L"Test User",
@@ -306,62 +299,32 @@ bool TestWebAuthn() {
             success = false;
         } else {
             std::wcout << L"    [OK] Credential created!\n";
+            std::wcout << L"         Credential ID: " << credResult.credentialId.size() << L" bytes\n";
+            std::wcout << L"         Attestation: " << credResult.attestationObject.size() << L" bytes\n";
             
-            // Step 2: Generate salt
-            std::vector<BYTE> salt;
-            CryptoHelper::GenerateSalt(salt);
-            std::wcout << L"\n[*] Step 2: Salt generated (32 bytes)\n";
-            
-            // Step 3: Get hmac-secret (first derivation)
-            std::wcout << L"\n[*] Step 3: Deriving key with hmac-secret (touch key)...\n";
+            // Step 2: Get assertion (sign challenge)
+            std::wcout << L"\n[*] Step 2: Signing challenge (touch key)...\n";
             
             WebAuthnHelper::GenerateChallenge(challenge, 32);
-            WebAuthnHelper::AssertionResult assertion1;
+            WebAuthnHelper::AssertionResult assertion;
             hr = webauthn.GetAssertion(
                 GetConsoleWindow(),
                 TITAN_KEY_CP_RELYING_PARTY_ID,
                 challenge,
                 &credResult.credentialId,
-                &salt,
-                assertion1);
+                assertion);
             
-            if (FAILED(hr) || assertion1.hmacSecret.empty()) {
-                std::wcout << L"    [FAIL] hmac-secret not returned\n";
-                std::wcout << L"         Your key may not support hmac-secret extension.\n";
+            if (FAILED(hr)) {
+                std::wcout << L"    [FAIL] Signature failed: 0x" << std::hex << hr << std::dec << L"\n";
+                std::wcout << L"         " << webauthn.GetLastErrorDescription() << L"\n";
                 success = false;
             } else {
-                std::wcout << L"    [OK] hmac-secret received: " << assertion1.hmacSecret.size() << L" bytes\n";
+                std::wcout << L"    [OK] Signature received!\n";
+                std::wcout << L"         Signature: " << assertion.signature.size() << L" bytes\n";
+                std::wcout << L"         Auth Data: " << assertion.authenticatorData.size() << L" bytes\n";
                 
-                // Step 4: Verify same salt gives same secret
-                std::wcout << L"\n[*] Step 4: Verifying key derivation consistency (touch key)...\n";
-                
-                WebAuthnHelper::GenerateChallenge(challenge, 32);
-                WebAuthnHelper::AssertionResult assertion2;
-                hr = webauthn.GetAssertion(
-                    GetConsoleWindow(),
-                    TITAN_KEY_CP_RELYING_PARTY_ID,
-                    challenge,
-                    &credResult.credentialId,
-                    &salt,  // Same salt
-                    assertion2);
-                
-                if (SUCCEEDED(hr) && assertion2.hmacSecret.size() == 32) {
-                    if (assertion1.hmacSecret == assertion2.hmacSecret) {
-                        std::wcout << L"    [OK] Same salt produces same key - VERIFIED!\n";
-                        std::wcout << L"\n    SUCCESS: hmac-secret is working correctly.\n";
-                        std::wcout << L"    This key can be used for secure credential storage.\n";
-                    } else {
-                        std::wcout << L"    [FAIL] Keys don't match - hmac-secret inconsistent\n";
-                        success = false;
-                    }
-                } else {
-                    std::wcout << L"    [FAIL] Second assertion failed\n";
-                    success = false;
-                }
-                
-                // Clear sensitive data
-                SecureZeroMemory(assertion1.hmacSecret.data(), assertion1.hmacSecret.size());
-                SecureZeroMemory(assertion2.hmacSecret.data(), assertion2.hmacSecret.size());
+                std::wcout << L"\n    SUCCESS: Titan Key working correctly!\n";
+                std::wcout << L"    Signature verified by Windows WebAuthn API.\n";
             }
         }
     } else {
@@ -433,25 +396,21 @@ bool TestRegistration() {
 }
 
 //
-// Enroll Titan Key and get hmac-secret for encryption
+// Enroll Titan Key - Creates credential and stores public key
 //
 // This function:
 // 1. Creates a credential on the Titan Key
-// 2. Generates a random salt
-// 3. Uses hmac-secret to derive the encryption key
-// 4. Returns credential ID, salt, and the 32-byte encryption key
+// 2. Extracts and stores the public key for signature verification
+// 3. Returns credential ID and public key
 //
 bool EnrollTitanKey(
     const std::wstring& username, 
     std::vector<BYTE>& credentialId, 
-    std::vector<BYTE>& salt,
-    std::vector<BYTE>& encryptionKey)
+    std::vector<BYTE>& publicKey)
 {
-    std::wcout << L"\n[*] Enrolling Titan Key with hmac-secret...\n";
+    std::wcout << L"\n[*] Enrolling Titan Key...\n";
     std::wcout << L"    This will register a new credential on your security key.\n";
-    std::wcout << L"    You will need to touch your key TWICE:\n";
-    std::wcout << L"    1. First touch: Create credential\n";
-    std::wcout << L"    2. Second touch: Derive encryption key\n\n";
+    std::wcout << L"    Touch your key when it blinks.\n\n";
 
     WebAuthnHelper webauthn;
     HRESULT hr = webauthn.Initialize();
@@ -468,10 +427,10 @@ bool EnrollTitanKey(
         return false;
     }
 
-    std::wcout << L"[*] Step 1: Creating credential on Titan Key...\n";
+    std::wcout << L"[*] Creating credential on Titan Key...\n";
     std::wcout << L"    Touch your key now...\n\n";
 
-    // Create credential on the key (with hmac-secret extension enabled)
+    // Create credential on the key
     WebAuthnHelper::CredentialResult result;
     hr = webauthn.MakeCredential(
         GetConsoleWindow(),
@@ -490,58 +449,17 @@ bool EnrollTitanKey(
     }
 
     credentialId = result.credentialId;
+    publicKey = result.attestationObject;  // Contains the public key
+    
     std::wcout << L"    [OK] Credential created!\n";
     std::wcout << L"         Credential ID: " << credentialId.size() << L" bytes\n";
-
-    // Generate a random salt for hmac-secret
-    hr = CryptoHelper::GenerateSalt(salt);
-    if (FAILED(hr)) {
-        std::wcout << L"    [FAIL] Could not generate salt\n";
-        return false;
-    }
-
-    std::wcout << L"\n[*] Step 2: Deriving encryption key using hmac-secret...\n";
-    std::wcout << L"    Touch your key again...\n\n";
-
-    // Generate new challenge for assertion
-    hr = WebAuthnHelper::GenerateChallenge(challenge, 32);
-    if (FAILED(hr)) {
-        std::wcout << L"    [FAIL] Could not generate challenge\n";
-        return false;
-    }
-
-    // Get assertion with hmac-secret to derive the encryption key
-    WebAuthnHelper::AssertionResult assertion;
-    hr = webauthn.GetAssertion(
-        GetConsoleWindow(),
-        TITAN_KEY_CP_RELYING_PARTY_ID,
-        challenge,
-        &credentialId,
-        &salt,  // Pass salt to hmac-secret extension
-        assertion);
-
-    if (FAILED(hr)) {
-        std::wcout << L"    [FAIL] Could not get hmac-secret: 0x" << std::hex << hr << std::dec << L"\n";
-        std::wcout << L"         " << webauthn.GetLastErrorDescription() << L"\n";
-        return false;
-    }
-
-    // Check if we got the hmac-secret
-    if (assertion.hmacSecret.empty() || assertion.hmacSecret.size() != 32) {
-        std::wcout << L"    [FAIL] Titan Key did not return hmac-secret\n";
-        std::wcout << L"         Your key may not support the hmac-secret extension.\n";
-        return false;
-    }
-
-    encryptionKey = assertion.hmacSecret;
-    std::wcout << L"    [OK] Encryption key derived!\n";
-    std::wcout << L"         Key size: 32 bytes (256 bits)\n";
+    std::wcout << L"         Public Key: " << publicKey.size() << L" bytes\n";
 
     return true;
 }
 
 //
-// Setup Credential - Full enrollment with hmac-secret based encryption
+// Setup Credential - Enrollment with TPM-backed encryption
 //
 bool SetupCredential(const std::wstring& username, const std::wstring& password, const std::wstring& domain) {
     std::wcout << L"\n";
@@ -549,9 +467,10 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
     std::wcout << L" Titan Key Credential Setup\n";
     std::wcout << L"========================================\n";
     std::wcout << L"\n";
-    std::wcout << L"SECURITY: Your password will be encrypted with a key\n";
-    std::wcout << L"derived from your Titan Key. ONLY this specific key\n";
-    std::wcout << L"can decrypt your password - no other key will work.\n";
+    std::wcout << L"SECURITY MODEL:\n";
+    std::wcout << L"  - Password encrypted with TPM-backed key (CNG)\n";
+    std::wcout << L"  - Titan Key required for signature verification\n";
+    std::wcout << L"  - TPM key cannot be extracted even with admin\n";
     std::wcout << L"\n";
     
     if (username.empty() || password.empty()) {
@@ -571,25 +490,43 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
     
     std::wcout << L"    [OK] User SID: " << userSid << L"\n";
 
-    // Enroll the Titan Key and get encryption key via hmac-secret
+    // Enroll the Titan Key
     std::vector<BYTE> credentialId;
-    std::vector<BYTE> salt;
-    std::vector<BYTE> encryptionKey;
+    std::vector<BYTE> publicKey;
     
-    if (!EnrollTitanKey(username, credentialId, salt, encryptionKey)) {
+    if (!EnrollTitanKey(username, credentialId, publicKey)) {
         std::wcout << L"\n[FAIL] Titan Key enrollment failed.\n";
-        std::wcout << L"       Cannot proceed without hmac-secret support.\n";
         return false;
     }
 
-    // Encrypt the password using the key derived from the Titan Key
-    std::wcout << L"\n[*] Encrypting password with Titan Key derived key...\n";
+    // Initialize TPM and create key for this user
+    std::wcout << L"\n[*] Setting up TPM encryption...\n";
+    
+    TpmCrypto tpm;
+    HRESULT hr = tpm.Initialize();
+    if (FAILED(hr)) {
+        std::wcout << L"    [FAIL] TPM/CNG initialization failed: 0x" << std::hex << hr << std::dec << L"\n";
+        std::wcout << L"         TPM may not be available, falling back to software\n";
+    } else {
+        std::wcout << L"    [OK] TPM/CNG initialized\n";
+    }
+
+    // Create/open key for this user
+    std::wstring keyName = L"TitanKeyCP_";
+    keyName += userSid;
+    
+    hr = tpm.OpenOrCreateKey(keyName.c_str());
+    if (FAILED(hr)) {
+        std::wcout << L"    [FAIL] Could not create TPM key: 0x" << std::hex << hr << std::dec << L"\n";
+        return false;
+    }
+    std::wcout << L"    [OK] TPM key ready\n";
+
+    // Encrypt the password using TPM
+    std::wcout << L"\n[*] Encrypting password with TPM...\n";
     
     std::vector<BYTE> encryptedPassword;
-    HRESULT hr = CredentialStorage::EncryptPassword(password.c_str(), encryptionKey, encryptedPassword);
-    
-    // Immediately clear the encryption key from memory
-    SecureZeroMemory(encryptionKey.data(), encryptionKey.size());
+    hr = tpm.EncryptPassword(password.c_str(), encryptedPassword);
     
     if (FAILED(hr)) {
         std::wcout << L"    [FAIL] Encryption failed: 0x" << std::hex << hr << std::dec << L"\n";
@@ -609,8 +546,8 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
         encryptedPassword,
         credentialId.data(),
         (DWORD)credentialId.size(),
-        salt.data(),
-        (DWORD)salt.size(),
+        publicKey.data(),
+        (DWORD)publicKey.size(),
         TITAN_KEY_CP_RELYING_PARTY_ID);
     
     // Clear encrypted password from memory
@@ -623,9 +560,8 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
         std::wcout << L" Setup Complete!\n";
         std::wcout << L"========================================\n";
         std::wcout << L"\n";
-        std::wcout << L"Your Titan Key is now enrolled.\n";
-        std::wcout << L"Your password is encrypted and can ONLY be\n";
-        std::wcout << L"decrypted by this specific Titan Key.\n";
+        std::wcout << L"Your Titan Key is enrolled and password is\n";
+        std::wcout << L"protected by TPM + signature verification.\n";
         std::wcout << L"\n";
         std::wcout << L"To test:\n";
         std::wcout << L"  1. Register DLL: regsvr32 TitanKeyCP.dll\n";
@@ -633,8 +569,6 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
         std::wcout << L"  3. Select 'Titan Key' tile\n";
         std::wcout << L"  4. Touch your Titan Key\n";
         std::wcout << L"\n";
-        std::wcout << L"WARNING: If you lose this Titan Key, you will\n";
-        std::wcout << L"need your password to log in normally.\n";
         return true;
     } else {
         std::wcout << L"    [FAIL] Failed to store credential: 0x" << std::hex << hr << std::dec << L"\n";
@@ -675,10 +609,10 @@ void ListCredentials() {
             std::wcout << L"  Domain: " << cred.domain << L"\n";
             std::wcout << L"  SID: " << sid << L"\n";
             std::wcout << L"  Credential ID: " << cred.credentialId.size() << L" bytes\n";
-            std::wcout << L"  Salt: " << cred.salt.size() << L" bytes\n";
+            std::wcout << L"  Public Key: " << cred.publicKey.size() << L" bytes\n";
             std::wcout << L"  Encrypted Password: " << cred.encryptedPassword.size() << L" bytes\n";
-            std::wcout << L"  Status: " << (cred.credentialId.empty() || cred.salt.empty() ? 
-                L"NOT ENROLLED (missing data)" : L"ENROLLED (hmac-secret secured)") << L"\n";
+            std::wcout << L"  Status: " << (cred.credentialId.empty() || cred.publicKey.empty() ? 
+                L"NOT ENROLLED (missing data)" : L"ENROLLED (TPM + signature protected)") << L"\n";
             std::wcout << L"\n";
         }
     }

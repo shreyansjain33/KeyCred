@@ -149,18 +149,6 @@ HRESULT WebAuthnHelper::MakeCredential(
     options.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
     options.bRequireResidentKey = FALSE;
 
-    // Request hmac-secret extension support
-    WEBAUTHN_EXTENSION hmacSecretExt = { 0 };
-    hmacSecretExt.pwszExtensionIdentifier = WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET;
-    hmacSecretExt.cbExtension = sizeof(BOOL);
-    BOOL enableHmacSecret = TRUE;
-    hmacSecretExt.pvExtension = &enableHmacSecret;
-
-    WEBAUTHN_EXTENSIONS extensions = { 0 };
-    extensions.cExtensions = 1;
-    extensions.pExtensions = &hmacSecretExt;
-    options.Extensions = extensions;
-
     // Generate cancellation ID
     CoCreateGuid(&m_cancellationId);
     options.pCancellationId = &m_cancellationId;
@@ -196,14 +184,6 @@ HRESULT WebAuthnHelper::MakeCredential(
     // The public key can be extracted from the attestation object if needed
     
     result.usedTransport = pAttestation->dwUsedTransport;
-    
-    // Check if hmac-secret extension was acknowledged
-    result.hmacSecretSupported = false;
-    if (pAttestation->dwVersion >= 3) {
-        // Check extensions in attestation for hmac-secret support
-        // For now, assume it's supported if the key responds
-        result.hmacSecretSupported = true;
-    }
 
     // Free the attestation
     WebAuthNFreeCredentialAttestation(pAttestation);
@@ -220,7 +200,6 @@ HRESULT WebAuthnHelper::GetAssertion(
     PCWSTR relyingPartyId,
     const std::vector<BYTE>& challenge,
     const std::vector<BYTE>* allowCredentialId,
-    const std::vector<BYTE>* salt,
     AssertionResult& result)
 {
     TITAN_LOG(L"WebAuthnHelper::GetAssertion");
@@ -266,23 +245,6 @@ HRESULT WebAuthnHelper::GetAssertion(
         allowCredentials.pCredentials = &allowCredential;
     }
 
-    // Setup hmac-secret salt using SDK types (requires Windows 10 1903+ SDK)
-    WEBAUTHN_HMAC_SECRET_SALT hmacSalt = { 0 };
-    WEBAUTHN_HMAC_SECRET_SALT_VALUES hmacSaltValues = { 0 };
-    
-    if (salt && salt->size() == 32) {
-        // Setup the salt structure
-        hmacSalt.cbFirst = 32;
-        hmacSalt.pbFirst = const_cast<BYTE*>(salt->data());
-        hmacSalt.cbSecond = 0;
-        hmacSalt.pbSecond = nullptr;
-        
-        // Use global salt for all credentials (simpler and works across SDK versions)
-        hmacSaltValues.pGlobalHmacSalt = &hmacSalt;
-        hmacSaltValues.cCredWithHmacSecretSaltList = 0;
-        hmacSaltValues.pCredWithHmacSecretSaltList = nullptr;
-    }
-
     // Setup options
     WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS options = { 0 };
     options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION;
@@ -292,11 +254,6 @@ HRESULT WebAuthnHelper::GetAssertion(
 
     if (allowCredentialId && !allowCredentialId->empty()) {
         options.CredentialList = allowCredentials;
-    }
-
-    // Add hmac-secret salt values (requires WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS version 5+)
-    if (salt && salt->size() == 32) {
-        options.pHmacSecretSaltValues = &hmacSaltValues;
     }
 
     // Generate cancellation ID
@@ -353,25 +310,6 @@ HRESULT WebAuthnHelper::GetAssertion(
         pAssertion->Credential.pbId + pAssertion->Credential.cbId);
 
     result.usedTransport = pAssertion->dwUsedTransport;
-
-    // Extract hmac-secret result from Extensions array
-    result.hmacSecret.clear();
-    if (pAssertion->Extensions.cExtensions > 0 && pAssertion->Extensions.pExtensions) {
-        for (DWORD i = 0; i < pAssertion->Extensions.cExtensions; i++) {
-            const WEBAUTHN_EXTENSION& ext = pAssertion->Extensions.pExtensions[i];
-            if (ext.pwszExtensionIdentifier && 
-                wcscmp(ext.pwszExtensionIdentifier, WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET) == 0) {
-                // hmac-secret extension found - extract the secret
-                if (ext.cbExtension >= 32 && ext.pvExtension) {
-                    result.hmacSecret.assign(
-                        (BYTE*)ext.pvExtension,
-                        (BYTE*)ext.pvExtension + ext.cbExtension);
-                    TITAN_LOG(L"hmac-secret received from Extensions");
-                }
-                break;
-            }
-        }
-    }
 
     // Free the assertion
     WebAuthNFreeAssertion(pAssertion);

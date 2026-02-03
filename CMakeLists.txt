@@ -21,6 +21,7 @@ set(SOURCES
     src/WebAuthnHelper.cpp
     src/CredentialStorage.cpp
     src/CryptoHelper.cpp
+    src/TpmCrypto.cpp
 )
 
 set(HEADERS
@@ -30,6 +31,7 @@ set(HEADERS
     src/WebAuthnHelper.h
     src/CredentialStorage.h
     src/CryptoHelper.h
+    src/TpmCrypto.h
     src/resource.h
     include/common.h
 )
@@ -48,7 +50,7 @@ target_include_directories(TitanKeyCP PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Link libraries
+# Link libraries (including ncrypt for TPM)
 target_link_libraries(TitanKeyCP PRIVATE
     advapi32
     crypt32
@@ -76,6 +78,7 @@ add_executable(TestTitanKeyCP
     src/CredentialStorage.cpp
     src/WebAuthnHelper.cpp
     src/CryptoHelper.cpp
+    src/TpmCrypto.cpp
 )
 
 target_include_directories(TestTitanKeyCP PRIVATE
@@ -90,6 +93,7 @@ target_link_libraries(TestTitanKeyCP PRIVATE
     user32
     webauthn
     bcrypt
+    ncrypt
 )
 
 set_target_properties(TestTitanKeyCP PROPERTIES

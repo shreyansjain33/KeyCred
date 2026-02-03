@@ -20,17 +20,15 @@ public:
         std::vector<BYTE> signature;
         std::vector<BYTE> userId;
         std::vector<BYTE> credentialId;
-        std::vector<BYTE> hmacSecret;      // 32-byte secret from hmac-secret extension
         DWORD usedTransport;
     };
 
     // Make credential (enrollment) result
     struct CredentialResult {
         std::vector<BYTE> credentialId;
-        std::vector<BYTE> publicKey;       // COSE public key
+        std::vector<BYTE> publicKey;       // Raw EC public key (64 bytes for P-256)
         std::vector<BYTE> attestationObject;
         DWORD usedTransport;
-        bool hmacSecretSupported;          // Whether the key supports hmac-secret
     };
 
     // Initialize WebAuthn - must be called before other operations
@@ -57,13 +55,12 @@ public:
         CredentialResult& result);
 
     // Get assertion (authentication)
-    // If salt is provided, hmac-secret extension is used to derive a 32-byte secret
+    // Returns signature that can be verified with the stored public key
     HRESULT GetAssertion(
         HWND hWnd,
         PCWSTR relyingPartyId,
         const std::vector<BYTE>& challenge,
         const std::vector<BYTE>* allowCredentialId,  // Optional: specific credential to use
-        const std::vector<BYTE>* salt,               // Optional: 32-byte salt for hmac-secret
         AssertionResult& result);
 
     // Verify assertion signature using stored public key

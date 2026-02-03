@@ -3,6 +3,7 @@
 #include "common.h"
 #include "CredentialStorage.h"
 #include "WebAuthnHelper.h"
+#include "TpmCrypto.h"
 
 // Forward declarations
 class TitanKeyCredentialProvider;
@@ -114,4 +115,5 @@ private:
     // Helpers
     CredentialStorage m_credentialStorage;
     WebAuthnHelper m_webAuthn;
+    TpmCrypto m_tpmCrypto;
 };
