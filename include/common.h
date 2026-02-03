@@ -9,10 +9,42 @@
 #include <wincred.h>
 #include <ntsecapi.h>
 #include <credentialprovider.h>
+#include <propkey.h>
 #include <webauthn.h>
 #include <wincrypt.h>
 #include <bcrypt.h>
 #include <sddl.h>
+
+// WebAuthn API version compatibility
+// These may not be defined in older Windows SDKs
+#ifndef WEBAUTHN_API_VERSION_1
+#define WEBAUTHN_API_VERSION_1 1
+#endif
+#ifndef WEBAUTHN_API_VERSION_2
+#define WEBAUTHN_API_VERSION_2 2
+#endif
+#ifndef WEBAUTHN_API_VERSION_3
+#define WEBAUTHN_API_VERSION_3 3
+#endif
+
+// HRESULT_FROM_NT may not be defined
+#ifndef HRESULT_FROM_NT
+#define HRESULT_FROM_NT(x) ((HRESULT) ((x) | FACILITY_NT_BIT))
+#endif
+#ifndef FACILITY_NT_BIT
+#define FACILITY_NT_BIT 0x10000000
+#endif
+
+// NTE error codes (from winerror.h, may not be defined in some SDKs)
+#ifndef NTE_NOT_FOUND
+#define NTE_NOT_FOUND ((HRESULT)0x80090011L)
+#endif
+#ifndef NTE_USER_CANCELLED
+#define NTE_USER_CANCELLED ((HRESULT)0x80090036L)
+#endif
+#ifndef NTE_INVALID_PARAMETER
+#define NTE_INVALID_PARAMETER ((HRESULT)0x80090027L)
+#endif
 
 // Standard library
 #include <string>
@@ -22,7 +54,22 @@
 
 // Utility macros
 #define SAFE_RELEASE(p) if ((p)) { (p)->Release(); (p) = nullptr; }
+#ifndef ARRAYSIZE
 #define ARRAYSIZE(a) (sizeof(a) / sizeof(a[0]))
+#endif
+
+// Define credential provider field GUIDs if not available in SDK
+// These are defined in newer Windows SDKs (1903+)
+// Using inline const GUID to avoid initguid.h issues
+#ifndef CPFG_CREDENTIAL_PROVIDER_LOGO
+static const GUID CPFG_CREDENTIAL_PROVIDER_LOGO = 
+    { 0x2d837775, 0xf6cd, 0x464e, { 0xa7, 0x45, 0x48, 0x2f, 0xd0, 0xb4, 0x74, 0x93 } };
+#endif
+
+#ifndef CPFG_CREDENTIAL_PROVIDER_LABEL
+static const GUID CPFG_CREDENTIAL_PROVIDER_LABEL = 
+    { 0x286bbff3, 0xbad4, 0x438f, { 0xb0, 0x07, 0x79, 0xb7, 0x26, 0x7c, 0x3d, 0x48 } };
+#endif
 
 // Registry paths
 #define TITAN_KEY_CP_REGISTRY_PATH L"SOFTWARE\\TitanKeyCP\\Credentials"

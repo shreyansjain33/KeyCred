@@ -180,13 +180,9 @@ HRESULT WebAuthnHelper::MakeCredential(
         pAttestation->pbAttestationObject,
         pAttestation->pbAttestationObject + pAttestation->cbAttestationObject);
 
-    // Extract public key if available
-    if (pAttestation->pbPublicKey && pAttestation->cbPublicKey > 0) {
-        result.publicKey.assign(
-            pAttestation->pbPublicKey,
-            pAttestation->pbPublicKey + pAttestation->cbPublicKey);
-    }
-
+    // Note: pbPublicKey/cbPublicKey are only available in newer SDK versions (WEBAUTHN_API_VERSION_3+)
+    // The public key can be extracted from the attestation object if needed
+    
     result.usedTransport = pAttestation->dwUsedTransport;
 
     // Free the attestation

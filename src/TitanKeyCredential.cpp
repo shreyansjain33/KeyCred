@@ -13,15 +13,6 @@
 extern void DllAddRef();
 extern void DllRelease();
 
-// Field descriptors
-static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_fieldDescriptors[] = {
-    { TKFI_TILEIMAGE,     CPFT_TILE_IMAGE,    L"Image",           CPFG_CREDENTIAL_PROVIDER_LOGO },
-    { TKFI_LABEL,         CPFT_LARGE_TEXT,    L"Titan Key Login", CPFG_CREDENTIAL_PROVIDER_LABEL },
-    { TKFI_USERNAME,      CPFT_LARGE_TEXT,    L"Username",        GUID_NULL },
-    { TKFI_STATUS,        CPFT_SMALL_TEXT,    L"Status",          GUID_NULL },
-    { TKFI_SUBMIT_BUTTON, CPFT_SUBMIT_BUTTON, L"Submit",          GUID_NULL },
-};
-
 TitanKeyCredential::TitanKeyCredential()
     : m_refCount(1)
     , m_provider(nullptr)
@@ -514,7 +505,7 @@ IFACEMETHODIMP TitanKeyCredential::Connect(IQueryContinueWithStatus* pqcws) {
 
     // Update the UI
     if (m_events) {
-        m_events->SetFieldString(this, TKFI_STATUS, m_statusText.c_str());
+        m_events->SetFieldString(static_cast<ICredentialProviderCredential*>(static_cast<ICredentialProviderCredential2*>(this)), TKFI_STATUS, m_statusText.c_str());
     }
 
     return hr;
