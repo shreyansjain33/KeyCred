@@ -266,7 +266,7 @@ HRESULT WebAuthnHelper::GetAssertion(
         allowCredentials.pCredentials = &allowCredential;
     }
 
-    // Setup hmac-secret salt if provided
+    // Setup hmac-secret salt using SDK types (requires Windows 10 1903+ SDK)
     WEBAUTHN_HMAC_SECRET_SALT hmacSalt = { 0 };
     WEBAUTHN_HMAC_SECRET_SALT_VALUES hmacSaltValues = { 0 };
     WEBAUTHN_CRED_WITH_HMAC_SECRET_SALT credWithSalt = { 0 };
@@ -303,9 +303,8 @@ HRESULT WebAuthnHelper::GetAssertion(
         options.CredentialList = allowCredentials;
     }
 
-    // Add hmac-secret salt if provided (requires API version 3+)
-    // Note: pHmacSecretSaltValues was added in WEBAUTHN API version 3 (Windows 10 1903+)
-    if (salt && salt->size() == 32 && m_apiVersion >= 3) {
+    // Add hmac-secret salt values (requires WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS version 5+)
+    if (salt && salt->size() == 32) {
         options.pHmacSecretSaltValues = &hmacSaltValues;
     }
 
@@ -364,13 +363,23 @@ HRESULT WebAuthnHelper::GetAssertion(
 
     result.usedTransport = pAssertion->dwUsedTransport;
 
-    // Extract hmac-secret result if available (requires API version 3+)
+    // Extract hmac-secret result from Extensions array
     result.hmacSecret.clear();
-    if (m_apiVersion >= 3 && pAssertion->cbHmacSecret > 0 && pAssertion->pbHmacSecret) {
-        result.hmacSecret.assign(
-            pAssertion->pbHmacSecret,
-            pAssertion->pbHmacSecret + pAssertion->cbHmacSecret);
-        TITAN_LOG(L"hmac-secret received");
+    if (pAssertion->Extensions.cExtensions > 0 && pAssertion->Extensions.pExtensions) {
+        for (DWORD i = 0; i < pAssertion->Extensions.cExtensions; i++) {
+            const WEBAUTHN_EXTENSION& ext = pAssertion->Extensions.pExtensions[i];
+            if (ext.pwszExtensionIdentifier && 
+                wcscmp(ext.pwszExtensionIdentifier, WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET) == 0) {
+                // hmac-secret extension found - extract the secret
+                if (ext.cbExtension >= 32 && ext.pvExtension) {
+                    result.hmacSecret.assign(
+                        (BYTE*)ext.pvExtension,
+                        (BYTE*)ext.pvExtension + ext.cbExtension);
+                    TITAN_LOG(L"hmac-secret received from Extensions");
+                }
+                break;
+            }
+        }
     }
 
     // Free the assertion
