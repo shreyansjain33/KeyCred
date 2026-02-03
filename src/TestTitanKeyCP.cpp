@@ -574,8 +574,8 @@ bool TestLockScreen() {
     }
     
     // Test 2: With NULL HWND (lock screen simulation)
-    std::wcout << L"\n[TEST 2] GetAssertion with NULL HWND (lock screen simulation)...\n";
-    TEST_LOG(L"TEST 2: Using NULL HWND (lock screen simulation)");
+    std::wcout << L"\n[TEST 2] GetAssertion with NULL HWND...\n";
+    TEST_LOG(L"TEST 2: Using NULL HWND");
     
     std::wcout << L"         Touch your Titan Key when prompted...\n";
     
@@ -583,7 +583,7 @@ bool TestLockScreen() {
     
     WebAuthnHelper::AssertionResult assertion2;
     hr = webauthn.GetAssertion(
-        NULL,  // NULL HWND - like lock screen
+        NULL,  // NULL HWND
         cred.relyingPartyId.c_str(),
         challenge,
         &cred.credentialId,
@@ -593,14 +593,71 @@ bool TestLockScreen() {
     
     if (SUCCEEDED(hr)) {
         std::wcout << L"    [OK] GetAssertion with NULL HWND succeeded!\n";
-        std::wcout << L"         This means lock screen should work too.\n";
         TEST_LOG(L"SUCCESS: NULL HWND works");
     } else {
-        std::wcout << L"    [FAIL] GetAssertion with NULL HWND failed: 0x" << std::hex << hr << std::dec << L"\n";
-        std::wcout << L"          " << webauthn.GetLastErrorDescription() << L"\n";
-        std::wcout << L"\n    This is likely the lock screen issue!\n";
+        std::wcout << L"    [FAIL] NULL HWND failed (expected): 0x" << std::hex << hr << std::dec << L"\n";
         TEST_LOG(webauthn.GetLastErrorDescription());
-        TEST_LOG(L"FAIL: NULL HWND does not work - this explains lock screen issue");
+    }
+    
+    // Test 3: With hidden window (our workaround)
+    std::wcout << L"\n[TEST 3] GetAssertion with hidden window (workaround)...\n";
+    TEST_LOG(L"TEST 3: Using hidden window workaround");
+    
+    // Create hidden window
+    static const WCHAR* WINDOW_CLASS = L"TitanKeyCPTestWindow";
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = WINDOW_CLASS;
+    RegisterClassW(&wc);
+    
+    HWND hwndHidden = CreateWindowExW(
+        0,
+        WINDOW_CLASS,
+        L"TitanKeyCP Test",
+        WS_OVERLAPPED,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1, 1,
+        NULL,
+        NULL,
+        GetModuleHandle(NULL),
+        NULL);
+    
+    swprintf_s(logBuf, L"Hidden window HWND: 0x%p", (void*)hwndHidden);
+    TEST_LOG(logBuf);
+    
+    if (!hwndHidden) {
+        std::wcout << L"    [FAIL] Could not create hidden window\n";
+        TEST_LOG(L"ERROR: CreateWindowExW failed");
+        return false;
+    }
+    
+    std::wcout << L"         Hidden window created: 0x" << std::hex << (ULONG_PTR)hwndHidden << std::dec << L"\n";
+    std::wcout << L"         Touch your Titan Key when prompted...\n";
+    
+    WebAuthnHelper::GenerateChallenge(challenge, 32);  // New challenge
+    
+    WebAuthnHelper::AssertionResult assertion3;
+    hr = webauthn.GetAssertion(
+        hwndHidden,
+        cred.relyingPartyId.c_str(),
+        challenge,
+        &cred.credentialId,
+        assertion3);
+    
+    DestroyWindow(hwndHidden);
+    
+    TEST_LOG_HR(L"GetAssertion (hidden window) returned", hr);
+    
+    if (SUCCEEDED(hr)) {
+        std::wcout << L"    [OK] GetAssertion with hidden window succeeded!\n";
+        std::wcout << L"         This workaround should fix the lock screen issue.\n";
+        TEST_LOG(L"SUCCESS: Hidden window workaround works!");
+        return true;
+    } else {
+        std::wcout << L"    [FAIL] Hidden window also failed: 0x" << std::hex << hr << std::dec << L"\n";
+        std::wcout << L"          " << webauthn.GetLastErrorDescription() << L"\n";
+        TEST_LOG(webauthn.GetLastErrorDescription());
+        TEST_LOG(L"FAIL: Hidden window workaround did not work");
         return false;
     }
     

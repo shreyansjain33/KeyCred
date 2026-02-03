@@ -581,24 +581,60 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
     }
 
     // Get assertion from Titan Key (user touches the key)
-    // At the lock screen (secure desktop), try to get a usable window handle
-    HWND hWnd = GetActiveWindow();
+    // WebAuthn requires a valid HWND - create a hidden window if needed
+    HWND hWnd = GetForegroundWindow();
+    BOOL createdWindow = FALSE;
+    
     if (!hWnd) {
-        // Fallback: no active window, use NULL and hope WebAuthn handles it
-        TITAN_LOG(L"No active window, using NULL HWND");
+        // Create a hidden window for WebAuthn
+        TITAN_LOG(L"Creating hidden window for WebAuthn");
+        
+        static bool windowClassRegistered = false;
+        static const WCHAR* WINDOW_CLASS = L"TitanKeyCPWebAuthnWindow";
+        
+        if (!windowClassRegistered) {
+            WNDCLASSW wc = {0};
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = GetModuleHandle(NULL);
+            wc.lpszClassName = WINDOW_CLASS;
+            RegisterClassW(&wc);
+            windowClassRegistered = true;
+        }
+        
+        hWnd = CreateWindowExW(
+            0,
+            WINDOW_CLASS,
+            L"TitanKeyCP WebAuthn",
+            WS_OVERLAPPED,
+            CW_USEDEFAULT, CW_USEDEFAULT, 1, 1,
+            NULL,
+            NULL,
+            GetModuleHandle(NULL),
+            NULL);
+        
+        if (hWnd) {
+            TITAN_LOG(L"Hidden window created successfully");
+            createdWindow = TRUE;
+        } else {
+            TITAN_LOG(L"Failed to create hidden window, using desktop");
+            hWnd = GetDesktopWindow();
+        }
     }
 
-    // Log credential info for debugging
     TITAN_LOG(L"Calling WebAuthn GetAssertion");
     
-    // Try without credential filter first (let authenticator discover)
     WebAuthnHelper::AssertionResult assertion;
     hr = m_webAuthn.GetAssertion(
         hWnd,
         storedCred.relyingPartyId.c_str(),
         challenge,
-        nullptr,  // No credential filter - let authenticator discover
+        &storedCred.credentialId,
         assertion);
+
+    // Cleanup: destroy window if we created it
+    if (createdWindow && hWnd) {
+        DestroyWindow(hWnd);
+    }
 
     if (FAILED(hr)) {
         TITAN_LOG_HR(L"GetAssertion failed", hr);
