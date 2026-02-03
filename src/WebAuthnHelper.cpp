@@ -282,8 +282,11 @@ HRESULT WebAuthnHelper::GetAssertion(
         
         // If we have a specific credential, associate salt with it
         if (allowCredentialId && !allowCredentialId->empty()) {
-            credWithSalt.cbCredentialId = (DWORD)allowCredentialId->size();
-            credWithSalt.pbCredentialId = const_cast<BYTE*>(allowCredentialId->data());
+            // SDK uses nested Credential structure with cbId/pbId members
+            credWithSalt.Credential.dwVersion = WEBAUTHN_CREDENTIAL_CURRENT_VERSION;
+            credWithSalt.Credential.cbId = (DWORD)allowCredentialId->size();
+            credWithSalt.Credential.pbId = const_cast<BYTE*>(allowCredentialId->data());
+            credWithSalt.Credential.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
             credWithSalt.pHmacSecretSalt = &hmacSalt;
             
             hmacSaltValues.cCredWithHmacSecretSaltList = 1;
