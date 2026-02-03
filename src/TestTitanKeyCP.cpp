@@ -17,8 +17,65 @@
 #include "TpmCrypto.h"
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <sddl.h>
+#include <ctime>
+
+// File logger for debugging
+class FileLogger {
+public:
+    static FileLogger& Instance() {
+        static FileLogger instance;
+        return instance;
+    }
+
+    void Open(const std::wstring& filename) {
+        m_file.open(filename, std::ios::out | std::ios::trunc);
+        if (m_file.is_open()) {
+            Log(L"=== Titan Key CP Test Log Started ===");
+        }
+    }
+
+    void Log(const std::wstring& message) {
+        if (m_file.is_open()) {
+            // Get timestamp
+            time_t now = time(nullptr);
+            struct tm timeinfo;
+            localtime_s(&timeinfo, &now);
+            wchar_t timestamp[32];
+            wcsftime(timestamp, 32, L"%Y-%m-%d %H:%M:%S", &timeinfo);
+            
+            m_file << L"[" << timestamp << L"] " << message << std::endl;
+            m_file.flush();
+        }
+        // Also output to console
+        std::wcout << L"[LOG] " << message << L"\n";
+    }
+
+    void LogHR(const std::wstring& message, HRESULT hr) {
+        wchar_t buf[512];
+        swprintf_s(buf, L"%s HR=0x%08X", message.c_str(), hr);
+        Log(buf);
+    }
+
+    void Close() {
+        if (m_file.is_open()) {
+            Log(L"=== Log Ended ===");
+            m_file.close();
+        }
+    }
+
+    ~FileLogger() { Close(); }
+
+private:
+    FileLogger() = default;
+    std::wofstream m_file;
+};
+
+// Convenient logging macros
+#define TEST_LOG(msg) FileLogger::Instance().Log(msg)
+#define TEST_LOG_HR(msg, hr) FileLogger::Instance().LogHR(msg, hr)
 
 // Command line options
 struct Options {
@@ -29,6 +86,7 @@ struct Options {
     bool testRegistration = false;
     bool setupCredential = false;
     bool listCredentials = false;
+    bool testLockScreen = false;  // Test with NULL HWND (simulates lock screen)
     std::wstring username;
     std::wstring password;
     std::wstring domain = L".";
@@ -54,6 +112,7 @@ void PrintHelp() {
     std::wcout << L"  --test-storage      Test TPM encryption\n";
     std::wcout << L"  --test-webauthn     Test WebAuthn signature verification\n";
     std::wcout << L"  --test-registration Check if DLL is properly registered\n";
+    std::wcout << L"  --test-lockscreen   Test with NULL HWND (simulates lock screen)\n";
     std::wcout << L"  --setup             Enroll Titan Key and encrypt password\n";
     std::wcout << L"  --list              List stored credentials\n";
     std::wcout << L"  --user <username>   Username for setup\n";
@@ -93,6 +152,8 @@ Options ParseCommandLine(int argc, wchar_t* argv[]) {
             opts.setupCredential = true;
         } else if (arg == L"--list") {
             opts.listCredentials = true;
+        } else if (arg == L"--test-lockscreen") {
+            opts.testLockScreen = true;
         } else if (arg == L"--user" && i + 1 < argc) {
             opts.username = argv[++i];
         } else if (arg == L"--password" && i + 1 < argc) {
@@ -237,20 +298,27 @@ bool TestCredentialStorage() {
 //
 bool TestWebAuthn() {
     std::wcout << L"\n--- Testing WebAuthn (Titan Key) ---\n\n";
+    TEST_LOG(L"=== TestWebAuthn started ===");
     
     WebAuthnHelper webauthn;
     bool success = true;
     
     // Initialize
     std::wcout << L"[*] Initializing WebAuthn...\n";
+    TEST_LOG(L"Initializing WebAuthn...");
     HRESULT hr = webauthn.Initialize();
     
     if (SUCCEEDED(hr)) {
         std::wcout << L"    [OK] WebAuthn initialized\n";
         std::wcout << L"         API Version: " << webauthn.GetApiVersion() << L"\n";
         std::wcout << L"         Available: " << (webauthn.IsAvailable() ? L"Yes" : L"No") << L"\n";
+        
+        wchar_t buf[128];
+        swprintf_s(buf, L"WebAuthn initialized. API Version: %u", webauthn.GetApiVersion());
+        TEST_LOG(buf);
     } else {
         std::wcout << L"    [FAIL] WebAuthn initialization failed: 0x" << std::hex << hr << std::dec << L"\n";
+        TEST_LOG_HR(L"WebAuthn initialization failed", hr);
         return false;
     }
     
@@ -304,18 +372,32 @@ bool TestWebAuthn() {
             
             // Step 2: Get assertion (sign challenge)
             std::wcout << L"\n[*] Step 2: Signing challenge (touch key)...\n";
+            TEST_LOG(L"Step 2: Getting assertion...");
             
             WebAuthnHelper::GenerateChallenge(challenge, 32);
+            
+            wchar_t logBuf[256];
+            swprintf_s(logBuf, L"RP ID: %s, Credential ID size: %zu, Challenge size: %zu",
+                TITAN_KEY_CP_RELYING_PARTY_ID, credResult.credentialId.size(), challenge.size());
+            TEST_LOG(logBuf);
+            
+            HWND hwnd = GetConsoleWindow();
+            swprintf_s(logBuf, L"Using HWND: 0x%p", (void*)hwnd);
+            TEST_LOG(logBuf);
+            
             WebAuthnHelper::AssertionResult assertion;
             hr = webauthn.GetAssertion(
-                GetConsoleWindow(),
+                hwnd,
                 TITAN_KEY_CP_RELYING_PARTY_ID,
                 challenge,
                 &credResult.credentialId,
                 assertion);
             
+            TEST_LOG_HR(L"GetAssertion returned", hr);
+            
             if (FAILED(hr)) {
                 std::wcout << L"    [FAIL] Signature failed: 0x" << std::hex << hr << std::dec << L"\n";
+                TEST_LOG(webauthn.GetLastErrorDescription());
                 std::wcout << L"         " << webauthn.GetLastErrorDescription() << L"\n";
                 success = false;
             } else {
@@ -396,6 +478,136 @@ bool TestRegistration() {
 }
 
 //
+// TestLockScreen - Test WebAuthn with NULL HWND (simulates lock screen)
+//
+// This tests the exact conditions of the credential provider at the lock screen:
+// - NULL HWND (no window handle available)
+// - Uses stored credential from registry
+//
+bool TestLockScreen() {
+    std::wcout << L"\n--- Testing Lock Screen Simulation ---\n\n";
+    TEST_LOG(L"=== TestLockScreen started ===");
+    
+    std::wcout << L"This test simulates lock screen conditions:\n";
+    std::wcout << L"  - Uses NULL HWND (like credential provider)\n";
+    std::wcout << L"  - Reads credential from registry\n\n";
+    
+    // First, list available credentials
+    CredentialStorage storage;
+    std::vector<std::wstring> userSids;
+    
+    HRESULT hr = storage.EnumerateUsers(userSids);
+    if (FAILED(hr) || userSids.empty()) {
+        std::wcout << L"[FAIL] No stored credentials found. Run --setup first.\n";
+        TEST_LOG(L"ERROR: No stored credentials");
+        return false;
+    }
+    
+    // Use first credential
+    std::wstring userSid = userSids[0];
+    CredentialStorage::UserCredential cred;
+    hr = storage.GetCredential(userSid.c_str(), cred);
+    
+    if (FAILED(hr)) {
+        std::wcout << L"[FAIL] Could not load credential\n";
+        TEST_LOG_HR(L"GetCredential failed", hr);
+        return false;
+    }
+    
+    std::wcout << L"[*] Using credential for user: " << cred.username << L"\n";
+    std::wcout << L"    SID: " << userSid << L"\n";
+    std::wcout << L"    Credential ID size: " << cred.credentialId.size() << L" bytes\n";
+    std::wcout << L"    RP ID: " << cred.relyingPartyId << L"\n\n";
+    
+    TEST_LOG((L"User: " + cred.username).c_str());
+    TEST_LOG((L"SID: " + userSid).c_str());
+    TEST_LOG((L"RP ID: " + cred.relyingPartyId).c_str());
+    
+    wchar_t logBuf[256];
+    swprintf_s(logBuf, L"Credential ID size: %zu", cred.credentialId.size());
+    TEST_LOG(logBuf);
+    
+    // Initialize WebAuthn
+    WebAuthnHelper webauthn;
+    hr = webauthn.Initialize();
+    
+    if (FAILED(hr)) {
+        std::wcout << L"[FAIL] WebAuthn init failed: 0x" << std::hex << hr << std::dec << L"\n";
+        TEST_LOG_HR(L"WebAuthn init failed", hr);
+        return false;
+    }
+    
+    std::wcout << L"[*] WebAuthn initialized (API v" << webauthn.GetApiVersion() << L")\n";
+    
+    // Generate challenge
+    std::vector<BYTE> challenge;
+    WebAuthnHelper::GenerateChallenge(challenge, 32);
+    
+    // Test 1: With GetConsoleWindow (should work)
+    std::wcout << L"\n[TEST 1] GetAssertion with GetConsoleWindow()...\n";
+    TEST_LOG(L"TEST 1: Using GetConsoleWindow()");
+    
+    HWND hwndConsole = GetConsoleWindow();
+    swprintf_s(logBuf, L"Console HWND: 0x%p", (void*)hwndConsole);
+    TEST_LOG(logBuf);
+    
+    std::wcout << L"         Touch your Titan Key when prompted...\n";
+    
+    WebAuthnHelper::AssertionResult assertion1;
+    hr = webauthn.GetAssertion(
+        hwndConsole,
+        cred.relyingPartyId.c_str(),
+        challenge,
+        &cred.credentialId,
+        assertion1);
+    
+    TEST_LOG_HR(L"GetAssertion (console HWND) returned", hr);
+    
+    if (SUCCEEDED(hr)) {
+        std::wcout << L"    [OK] GetAssertion with console HWND succeeded!\n";
+        std::wcout << L"         Signature size: " << assertion1.signature.size() << L" bytes\n";
+    } else {
+        std::wcout << L"    [FAIL] GetAssertion failed: 0x" << std::hex << hr << std::dec << L"\n";
+        std::wcout << L"          " << webauthn.GetLastErrorDescription() << L"\n";
+        TEST_LOG(webauthn.GetLastErrorDescription());
+        return false;
+    }
+    
+    // Test 2: With NULL HWND (lock screen simulation)
+    std::wcout << L"\n[TEST 2] GetAssertion with NULL HWND (lock screen simulation)...\n";
+    TEST_LOG(L"TEST 2: Using NULL HWND (lock screen simulation)");
+    
+    std::wcout << L"         Touch your Titan Key when prompted...\n";
+    
+    WebAuthnHelper::GenerateChallenge(challenge, 32);  // New challenge
+    
+    WebAuthnHelper::AssertionResult assertion2;
+    hr = webauthn.GetAssertion(
+        NULL,  // NULL HWND - like lock screen
+        cred.relyingPartyId.c_str(),
+        challenge,
+        &cred.credentialId,
+        assertion2);
+    
+    TEST_LOG_HR(L"GetAssertion (NULL HWND) returned", hr);
+    
+    if (SUCCEEDED(hr)) {
+        std::wcout << L"    [OK] GetAssertion with NULL HWND succeeded!\n";
+        std::wcout << L"         This means lock screen should work too.\n";
+        TEST_LOG(L"SUCCESS: NULL HWND works");
+    } else {
+        std::wcout << L"    [FAIL] GetAssertion with NULL HWND failed: 0x" << std::hex << hr << std::dec << L"\n";
+        std::wcout << L"          " << webauthn.GetLastErrorDescription() << L"\n";
+        std::wcout << L"\n    This is likely the lock screen issue!\n";
+        TEST_LOG(webauthn.GetLastErrorDescription());
+        TEST_LOG(L"FAIL: NULL HWND does not work - this explains lock screen issue");
+        return false;
+    }
+    
+    return true;
+}
+
+//
 // Enroll Titan Key - Creates credential and stores public key
 //
 // This function:
@@ -462,6 +674,8 @@ bool EnrollTitanKey(
 // Setup Credential - Enrollment with TPM-backed encryption
 //
 bool SetupCredential(const std::wstring& username, const std::wstring& password, const std::wstring& domain) {
+    TEST_LOG(L"=== SetupCredential started ===");
+    
     std::wcout << L"\n";
     std::wcout << L"========================================\n";
     std::wcout << L" Titan Key Credential Setup\n";
@@ -475,8 +689,11 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
     
     if (username.empty() || password.empty()) {
         std::wcout << L"[FAIL] Username and password are required\n";
+        TEST_LOG(L"ERROR: Username or password empty");
         return false;
     }
+    
+    TEST_LOG((L"Setting up for user: " + username).c_str());
     
     // Get user SID
     std::wcout << L"[*] Looking up user SID for: " << username << L"\n";
@@ -485,10 +702,12 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
     if (userSid.empty()) {
         std::wcout << L"    [FAIL] Could not resolve user SID\n";
         std::wcout << L"         Make sure the username is correct\n";
+        TEST_LOG(L"ERROR: Could not resolve user SID");
         return false;
     }
     
     std::wcout << L"    [OK] User SID: " << userSid << L"\n";
+    TEST_LOG((L"User SID: " + userSid).c_str());
 
     // Enroll the Titan Key
     std::vector<BYTE> credentialId;
@@ -624,6 +843,10 @@ void ListCredentials() {
 int wmain(int argc, wchar_t* argv[]) {
     PrintBanner();
     
+    // Initialize file logging
+    FileLogger::Instance().Open(L"TitanKeyCP_test.log");
+    TEST_LOG(L"Test application started");
+    
     Options opts = ParseCommandLine(argc, argv);
     
     if (opts.showHelp || argc == 1) {
@@ -666,6 +889,12 @@ int wmain(int argc, wchar_t* argv[]) {
     
     if (opts.testAll || opts.testWebAuthn) {
         if (!TestWebAuthn()) {
+            allPassed = false;
+        }
+    }
+    
+    if (opts.testLockScreen) {
+        if (!TestLockScreen()) {
             allPassed = false;
         }
     }

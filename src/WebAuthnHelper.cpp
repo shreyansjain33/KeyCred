@@ -235,38 +235,36 @@ HRESULT WebAuthnHelper::GetAssertion(
     WEBAUTHN_CREDENTIAL allowCredential = { 0 };
     WEBAUTHN_CREDENTIALS allowCredentials = { 0 };
 
-    if (allowCredentialId && !allowCredentialId->empty()) {
+    // Configure credential filter if provided
+    BOOL useCredentialFilter = (allowCredentialId && !allowCredentialId->empty());
+    if (useCredentialFilter) {
         allowCredential.dwVersion = WEBAUTHN_CREDENTIAL_CURRENT_VERSION;
         allowCredential.cbId = (DWORD)allowCredentialId->size();
         allowCredential.pbId = const_cast<BYTE*>(allowCredentialId->data());
         allowCredential.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
-        // Note: dwTransports not available in all SDK versions, omit for compatibility
 
         allowCredentials.cCredentials = 1;
         allowCredentials.pCredentials = &allowCredential;
+        
+        TITAN_LOG(L"Using credential filter");
+    } else {
+        TITAN_LOG(L"No credential filter - authenticator will discover");
     }
 
-    // Setup options - use minimum necessary version for compatibility
+    // Setup options - minimal configuration for maximum compatibility
     WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS options = { 0 };
-    options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_1;  // Minimum version
+    options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION;
     options.dwTimeoutMilliseconds = 60000;  // 60 seconds
-    options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM;
-    options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_DISCOURAGED;
     
-    // Only set credential list if we have credentials to filter
-    if (allowCredentialId && !allowCredentialId->empty()) {
+    // Only set credential list if we have a filter, otherwise let authenticator discover
+    if (useCredentialFilter) {
         options.CredentialList = allowCredentials;
     }
-
-    // Cancellation ID (available in version 2+)
-    if (m_apiVersion >= WEBAUTHN_API_VERSION_2) {
-        CoCreateGuid(&m_cancellationId);
-        options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_2;
-        options.pCancellationId = &m_cancellationId;
-    }
+    // Leave other fields at 0/default - authenticator attachment ANY, UV discouraged
 
     // Call WebAuthn API
     PWEBAUTHN_ASSERTION pAssertion = nullptr;
+    TITAN_LOG(L"Calling WebAuthNAuthenticatorGetAssertion");
     hr = WebAuthNAuthenticatorGetAssertion(
         hWnd,
         relyingPartyId,

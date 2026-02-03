@@ -581,16 +581,23 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
     }
 
     // Get assertion from Titan Key (user touches the key)
-    // At the lock screen (secure desktop), NULL lets Windows place the UI appropriately
-    HWND hWnd = NULL;
-    TITAN_LOG(L"Calling WebAuthn GetAssertion");
+    // At the lock screen (secure desktop), try to get a usable window handle
+    HWND hWnd = GetActiveWindow();
+    if (!hWnd) {
+        // Fallback: no active window, use NULL and hope WebAuthn handles it
+        TITAN_LOG(L"No active window, using NULL HWND");
+    }
 
+    // Log credential info for debugging
+    TITAN_LOG(L"Calling WebAuthn GetAssertion");
+    
+    // Try without credential filter first (let authenticator discover)
     WebAuthnHelper::AssertionResult assertion;
     hr = m_webAuthn.GetAssertion(
         hWnd,
         storedCred.relyingPartyId.c_str(),
         challenge,
-        &storedCred.credentialId,
+        nullptr,  // No credential filter - let authenticator discover
         assertion);
 
     if (FAILED(hr)) {
