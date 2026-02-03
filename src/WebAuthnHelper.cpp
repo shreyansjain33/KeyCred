@@ -240,7 +240,7 @@ HRESULT WebAuthnHelper::GetAssertion(
         allowCredential.cbId = (DWORD)allowCredentialId->size();
         allowCredential.pbId = const_cast<BYTE*>(allowCredentialId->data());
         allowCredential.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
-        allowCredential.dwTransports = WEBAUTHN_CTAP_TRANSPORT_USB;  // Titan Key is USB
+        // Note: dwTransports not available in all SDK versions, omit for compatibility
 
         allowCredentials.cCredentials = 1;
         allowCredentials.pCredentials = &allowCredential;
