@@ -172,13 +172,19 @@ HRESULT TpmCrypto::Encrypt(
     }
 
     do {
+        // Setup OAEP padding info (required for NCRYPT_PAD_OAEP_FLAG)
+        BCRYPT_OAEP_PADDING_INFO oaepInfo = { 0 };
+        oaepInfo.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+        oaepInfo.pbLabel = nullptr;
+        oaepInfo.cbLabel = 0;
+
         // Wrap (encrypt) the AES key with TPM RSA key
         DWORD wrappedKeySize = 0;
         SECURITY_STATUS secStatus = NCryptEncrypt(
             m_hKey,
             aesKey,
             AES_KEY_SIZE,
-            nullptr,
+            &oaepInfo,
             nullptr,
             0,
             &wrappedKeySize,
@@ -194,7 +200,7 @@ HRESULT TpmCrypto::Encrypt(
             m_hKey,
             aesKey,
             AES_KEY_SIZE,
-            nullptr,
+            &oaepInfo,
             wrappedKey.data(),
             wrappedKeySize,
             &wrappedKeySize,
@@ -270,13 +276,19 @@ HRESULT TpmCrypto::Decrypt(
         // Extract wrapped key
         const BYTE* wrappedKey = encryptedBlob.data() + 4;
 
+        // Setup OAEP padding info (must match encryption)
+        BCRYPT_OAEP_PADDING_INFO oaepInfo = { 0 };
+        oaepInfo.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+        oaepInfo.pbLabel = nullptr;
+        oaepInfo.cbLabel = 0;
+
         // Unwrap AES key using TPM
         DWORD aesKeySize = 0;
         SECURITY_STATUS secStatus = NCryptDecrypt(
             m_hKey,
             const_cast<BYTE*>(wrappedKey),
             wrappedKeySize,
-            nullptr,
+            &oaepInfo,
             nullptr,
             0,
             &aesKeySize,
@@ -291,7 +303,7 @@ HRESULT TpmCrypto::Decrypt(
             m_hKey,
             const_cast<BYTE*>(wrappedKey),
             wrappedKeySize,
-            nullptr,
+            &oaepInfo,
             aesKey,
             AES_KEY_SIZE,
             &aesKeySize,
