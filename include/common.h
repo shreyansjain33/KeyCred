@@ -46,6 +46,28 @@
 #define NTE_INVALID_PARAMETER ((HRESULT)0x80090027L)
 #endif
 
+// NTSTATUS codes (may not be defined in all SDKs)
+#ifndef STATUS_SUCCESS
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
+#endif
+#ifndef STATUS_LOGON_FAILURE
+#define STATUS_LOGON_FAILURE ((NTSTATUS)0xC000006DL)
+#endif
+#ifndef STATUS_ACCOUNT_DISABLED
+#define STATUS_ACCOUNT_DISABLED ((NTSTATUS)0xC0000072L)
+#endif
+#ifndef STATUS_ACCOUNT_LOCKED_OUT
+#define STATUS_ACCOUNT_LOCKED_OUT ((NTSTATUS)0xC0000234L)
+#endif
+#ifndef STATUS_PASSWORD_EXPIRED
+#define STATUS_PASSWORD_EXPIRED ((NTSTATUS)0xC0000071L)
+#endif
+
+// NT_SUCCESS macro
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
 // Standard library
 #include <string>
 #include <vector>
@@ -69,6 +91,11 @@ static const GUID CPFG_CREDENTIAL_PROVIDER_LOGO =
 #ifndef CPFG_CREDENTIAL_PROVIDER_LABEL
 static const GUID CPFG_CREDENTIAL_PROVIDER_LABEL = 
     { 0x286bbff3, 0xbad4, 0x438f, { 0xb0, 0x07, 0x79, 0xb7, 0x26, 0x7c, 0x3d, 0x48 } };
+#endif
+
+// CREDENTIAL_PROVIDER_NO_DEFAULT may not be defined in older SDKs
+#ifndef CREDENTIAL_PROVIDER_NO_DEFAULT
+#define CREDENTIAL_PROVIDER_NO_DEFAULT ((DWORD)-1)
 #endif
 
 // Registry paths

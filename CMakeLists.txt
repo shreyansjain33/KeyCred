@@ -81,6 +81,7 @@ target_link_libraries(TestTitanKeyCP PRIVATE
     advapi32
     crypt32
     ole32
+    user32
     webauthn
     bcrypt
 )

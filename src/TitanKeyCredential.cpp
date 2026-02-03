@@ -410,7 +410,7 @@ IFACEMETHODIMP TitanKeyCredential::GetSerialization(
 
 IFACEMETHODIMP TitanKeyCredential::ReportResult(
     NTSTATUS ntsStatus,
-    NTSTATUS ntsSubstatus,
+    NTSTATUS /*ntsSubstatus*/,
     PWSTR* ppwszOptionalStatusText,
     CREDENTIAL_PROVIDER_STATUS_ICON* pcpsiOptionalStatusIcon)
 {
