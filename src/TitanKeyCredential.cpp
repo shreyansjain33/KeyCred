@@ -95,7 +95,7 @@ HRESULT TitanKeyCredential::Initialize(
         }
     }
 
-    m_statusText = L"Click Submit to sign in with Titan Key";
+    m_statusText = L"Touch your security key to sign in";
 
     // Initialize WebAuthn
     HRESULT hr = m_webAuthn.Initialize();
@@ -180,9 +180,9 @@ IFACEMETHODIMP TitanKeyCredential::SetSelected(BOOL* pbAutoLogon) {
     TITAN_LOG(L"TitanKeyCredential::SetSelected");
 
     if (pbAutoLogon) {
-        // Do NOT auto-trigger - let user click Submit button
-        // Auto-trigger blocks UI and prevents switching to other credentials
-        *pbAutoLogon = FALSE;
+        // Auto-trigger authentication when tile is selected
+        // CTAP2 direct HID is cancellable, so switching tiles will work
+        *pbAutoLogon = TRUE;
     }
 
     return S_OK;
@@ -191,9 +191,10 @@ IFACEMETHODIMP TitanKeyCredential::SetSelected(BOOL* pbAutoLogon) {
 IFACEMETHODIMP TitanKeyCredential::SetDeselected() {
     TITAN_LOG(L"TitanKeyCredential::SetDeselected");
 
-    // Cancel any ongoing WebAuthn operation when user switches tiles
+    // Cancel any ongoing CTAP2 operation when user switches tiles
     if (m_operationInProgress) {
-        TITAN_LOG(L"SetDeselected - cancelling WebAuthn operation");
+        TITAN_LOG(L"SetDeselected - cancelling CTAP2 operation");
+        m_ctap2.Cancel();
         m_webAuthn.CancelOperation();
         m_operationInProgress = FALSE;
     }
@@ -235,7 +236,7 @@ IFACEMETHODIMP TitanKeyCredential::GetFieldState(
         *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
         break;
     case TKFI_SUBMIT_BUTTON:
-        *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;  // Visible - user must click to trigger
+        *pcpfs = CPFS_HIDDEN;  // Hidden - auto-trigger on tile selection
         break;
     default:
         *pcpfs = CPFS_HIDDEN;
@@ -556,9 +557,10 @@ IFACEMETHODIMP TitanKeyCredential::Connect(IQueryContinueWithStatus* pqcws) {
 IFACEMETHODIMP TitanKeyCredential::Disconnect() {
     TITAN_LOG(L"TitanKeyCredential::Disconnect");
 
-    // Cancel any ongoing WebAuthn operation
+    // Cancel any ongoing CTAP2/WebAuthn operation
     if (m_operationInProgress) {
-        TITAN_LOG(L"Cancelling WebAuthn operation");
+        TITAN_LOG(L"Cancelling CTAP2 operation");
+        m_ctap2.Cancel();
         m_webAuthn.CancelOperation();
         m_operationInProgress = FALSE;
     }
@@ -571,20 +573,15 @@ IFACEMETHODIMP TitanKeyCredential::Disconnect() {
 }
 
 //
-// PerformAuthentication - Execute WebAuthn authentication and retrieve password
+// PerformAuthentication - Execute FIDO2 authentication and retrieve password
 //
-// Uses signature verification + TPM decryption:
+// Uses CTAP2 direct HID communication (bypasses Windows WebAuthn service):
 // 1. Titan Key signs a challenge (proves physical presence)
 // 2. Signature verified with stored public key
 // 3. TPM decrypts the password (hardware-protected)
 //
 HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcws) {
     TITAN_LOG(L"TitanKeyCredential::PerformAuthentication");
-
-    // Check if WebAuthn is available
-    if (!m_webAuthn.IsAvailable()) {
-        return E_FAIL;
-    }
 
     // Get stored credential information
     CredentialStorage::UserCredential storedCred;
@@ -614,119 +611,92 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
 
     // Update status
     if (pqcws) {
-        pqcws->SetStatusMessage(L"Waiting for security key...");
+        pqcws->SetStatusMessage(L"Looking for security key...");
     }
 
-    // Generate challenge
+    // Initialize CTAP2 direct HID communication
+    // This bypasses Windows WebAuthn service and works on secure desktop
+    TITAN_LOG(L"Initializing CTAP2 direct HID...");
+    hr = m_ctap2.Initialize();
+    if (FAILED(hr)) {
+        TITAN_LOG_HR(L"CTAP2 Initialize failed", hr);
+        if (pqcws) {
+            std::wstring errMsg = L"Security key not found: ";
+            errMsg += m_ctap2.GetLastErrorDescription();
+            pqcws->SetStatusMessage(errMsg.c_str());
+        }
+        return hr;
+    }
+
+    TITAN_LOG(L"CTAP2 initialized - device found");
+
+    // Update status
+    if (pqcws) {
+        pqcws->SetStatusMessage(L"Touch your security key...");
+    }
+
+    // Generate challenge and compute clientDataHash
     std::vector<BYTE> challenge;
-    hr = WebAuthnHelper::GenerateChallenge(challenge);
+    hr = Ctap2Helper::GenerateChallenge(challenge);
     if (FAILED(hr)) {
         TITAN_LOG_HR(L"Failed to generate challenge", hr);
         return hr;
     }
 
-    // Get assertion from Titan Key (user touches the key)
-    // WebAuthn requires a valid HWND - try multiple approaches
-    HWND hWnd = NULL;
-    BOOL createdWindow = FALSE;
-    
-    // Try 1: Get foreground window
-    hWnd = GetForegroundWindow();
-    if (hWnd) {
-        TITAN_LOG(L"Using foreground window");
+    // Create clientDataJSON and hash it (standard WebAuthn format)
+    std::string clientDataJson = "{\"type\":\"webauthn.get\",\"challenge\":\"";
+    // Base64url encode challenge (simplified - just hex for now since we verify locally)
+    for (BYTE b : challenge) {
+        char hex[3];
+        sprintf_s(hex, "%02x", b);
+        clientDataJson += hex;
     }
-    
-    // Try 2: Create a popup window (works better on secure desktop)
-    if (!hWnd) {
-        TITAN_LOG(L"No foreground window, creating popup window");
-        
-        static bool windowClassRegistered = false;
-        static const WCHAR* WINDOW_CLASS = L"TitanKeyCPWebAuthnWindow";
-        
-        if (!windowClassRegistered) {
-            WNDCLASSEXW wc = {0};
-            wc.cbSize = sizeof(WNDCLASSEXW);
-            wc.lpfnWndProc = DefWindowProcW;
-            wc.hInstance = GetModuleHandle(NULL);
-            wc.lpszClassName = WINDOW_CLASS;
-            wc.style = CS_HREDRAW | CS_VREDRAW;
-            if (RegisterClassExW(&wc)) {
-                windowClassRegistered = true;
-                TITAN_LOG(L"Window class registered");
-            } else {
-                TITAN_LOG(L"Failed to register window class");
-            }
-        }
-        
-        // Create a popup window - these work on secure desktop
-        hWnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            WINDOW_CLASS,
-            L"Security Key",
-            WS_POPUP,
-            0, 0, 1, 1,
-            NULL,
-            NULL,
-            GetModuleHandle(NULL),
-            NULL);
-        
-        if (hWnd) {
-            TITAN_LOG(L"Popup window created");
-            createdWindow = TRUE;
-            // Make sure it's valid
-            ShowWindow(hWnd, SW_HIDE);
-        } else {
-            DWORD err = GetLastError();
-            WCHAR buf[128];
-            swprintf_s(buf, L"CreateWindowExW failed, error: %u", err);
-            TitanLogToFile(buf);
-        }
-    }
-    
-    // Try 3: Use desktop window as last resort
-    if (!hWnd) {
-        TITAN_LOG(L"Using desktop window");
-        hWnd = GetDesktopWindow();
-    }
+    clientDataJson += "\",\"origin\":\"https://";
+    // Convert RP ID to UTF-8
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, storedCred.relyingPartyId.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string rpIdUtf8(utf8Len - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, storedCred.relyingPartyId.c_str(), -1, &rpIdUtf8[0], utf8Len, nullptr, nullptr);
+    clientDataJson += rpIdUtf8;
+    clientDataJson += "\"}";
 
-    {
-        WCHAR buf[128];
-        swprintf_s(buf, L"Using HWND: 0x%p", (void*)hWnd);
-        TitanLogToFile(buf);
+    std::vector<BYTE> clientDataJsonBytes(clientDataJson.begin(), clientDataJson.end());
+    std::vector<BYTE> clientDataHash;
+    hr = Ctap2Helper::ComputeSHA256(clientDataJsonBytes, clientDataHash);
+    if (FAILED(hr)) {
+        TITAN_LOG_HR(L"Failed to compute clientDataHash", hr);
+        return hr;
     }
     
-    TITAN_LOG(L"Calling WebAuthn GetAssertion");
+    TITAN_LOG(L"Calling CTAP2 GetAssertion");
     
     // Mark operation in progress (allows Disconnect to cancel)
     m_operationInProgress = TRUE;
     
-    WebAuthnHelper::AssertionResult assertion;
-    hr = m_webAuthn.GetAssertion(
-        hWnd,
-        storedCred.relyingPartyId.c_str(),
-        challenge,
+    Ctap2Helper::AssertionResult assertion;
+    hr = m_ctap2.GetAssertion(
+        storedCred.relyingPartyId,
+        clientDataHash,
         &storedCred.credentialId,
+        30000,  // 30 second timeout
         assertion);
 
     // Operation complete
     m_operationInProgress = FALSE;
 
-    // Cleanup: destroy window if we created it
-    if (createdWindow && hWnd) {
-        DestroyWindow(hWnd);
-    }
+    // Close device
+    m_ctap2.Close();
 
     if (FAILED(hr)) {
-        TITAN_LOG_HR(L"GetAssertion failed", hr);
+        TITAN_LOG_HR(L"CTAP2 GetAssertion failed", hr);
         if (pqcws) {
             std::wstring errMsg = L"Authentication failed: ";
-            errMsg += m_webAuthn.GetLastErrorDescription();
+            errMsg += m_ctap2.GetLastErrorDescription();
             pqcws->SetStatusMessage(errMsg.c_str());
         }
         return hr;
     }
     
-    TITAN_LOG(L"GetAssertion succeeded - signature obtained");
+    TITAN_LOG(L"CTAP2 GetAssertion succeeded - signature obtained");
 
     // Verify the signature using stored public key
     // This proves the user has the enrolled Titan Key

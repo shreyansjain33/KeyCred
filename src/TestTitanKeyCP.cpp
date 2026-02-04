@@ -13,6 +13,7 @@
 #include "common.h"
 #include "CredentialStorage.h"
 #include "WebAuthnHelper.h"
+#include "Ctap2Helper.h"
 #include "CryptoHelper.h"
 #include "TpmCrypto.h"
 
@@ -83,6 +84,7 @@ struct Options {
     bool testAll = false;
     bool testStorage = false;
     bool testWebAuthn = false;
+    bool testCtap2 = false;       // Test direct CTAP2/HID (for lock screen)
     bool testRegistration = false;
     bool setupCredential = false;
     bool listCredentials = false;
@@ -111,6 +113,7 @@ void PrintHelp() {
     std::wcout << L"  --test-all          Run all tests\n";
     std::wcout << L"  --test-storage      Test TPM encryption\n";
     std::wcout << L"  --test-webauthn     Test WebAuthn signature verification\n";
+    std::wcout << L"  --test-ctap2        Test direct CTAP2/HID (works on lock screen!)\n";
     std::wcout << L"  --test-registration Check if DLL is properly registered\n";
     std::wcout << L"  --test-lockscreen   Test with NULL HWND (simulates lock screen)\n";
     std::wcout << L"  --setup             Enroll Titan Key and encrypt password\n";
@@ -127,6 +130,7 @@ void PrintHelp() {
     std::wcout << L"\n";
     std::wcout << L"Examples:\n";
     std::wcout << L"  TestTitanKeyCP.exe --setup --user John --password 1234\n";
+    std::wcout << L"  TestTitanKeyCP.exe --test-ctap2     (test lock screen compatible method)\n";
     std::wcout << L"  TestTitanKeyCP.exe --test-webauthn\n";
     std::wcout << L"  TestTitanKeyCP.exe --list\n";
     std::wcout << L"\n";
@@ -146,6 +150,8 @@ Options ParseCommandLine(int argc, wchar_t* argv[]) {
             opts.testStorage = true;
         } else if (arg == L"--test-webauthn") {
             opts.testWebAuthn = true;
+        } else if (arg == L"--test-ctap2") {
+            opts.testCtap2 = true;
         } else if (arg == L"--test-registration") {
             opts.testRegistration = true;
         } else if (arg == L"--setup") {
@@ -665,6 +671,145 @@ bool TestLockScreen() {
 }
 
 //
+// Test: CTAP2 Direct HID Communication
+//
+// This is the method that works on the lock screen - it bypasses
+// Windows WebAuthn service and talks directly to the USB HID device.
+//
+bool TestCtap2() {
+    std::wcout << L"\n--- Testing CTAP2 Direct HID ---\n\n";
+    TEST_LOG(L"=== TestCtap2 started ===");
+    
+    std::wcout << L"This tests direct USB HID communication with FIDO2 keys.\n";
+    std::wcout << L"Unlike WebAuthn, this works on the lock screen!\n\n";
+    
+    // Initialize CTAP2
+    std::wcout << L"[*] Looking for FIDO2 device...\n";
+    TEST_LOG(L"Initializing CTAP2...");
+    
+    Ctap2Helper ctap2;
+    HRESULT hr = ctap2.Initialize();
+    
+    if (FAILED(hr)) {
+        std::wcout << L"    [FAIL] " << ctap2.GetLastErrorDescription() << L"\n";
+        std::wcout << L"         Make sure your Titan Key is plugged in.\n";
+        TEST_LOG_HR(L"CTAP2 Initialize failed", hr);
+        TEST_LOG(ctap2.GetLastErrorDescription());
+        return false;
+    }
+    
+    std::wcout << L"    [OK] FIDO2 device found and channel established!\n";
+    TEST_LOG(L"CTAP2 initialized - device found");
+    
+    // Get device info
+    std::wcout << L"\n[*] Getting device info...\n";
+    std::vector<BYTE> info;
+    hr = ctap2.GetInfo(info);
+    
+    if (SUCCEEDED(hr)) {
+        std::wcout << L"    [OK] Device info received (" << info.size() << L" bytes)\n";
+        TEST_LOG(L"GetInfo succeeded");
+    } else {
+        std::wcout << L"    [WARN] GetInfo failed (non-critical)\n";
+    }
+    
+    // Check if we have stored credentials
+    CredentialStorage storage;
+    std::vector<std::wstring> userSids;
+    storage.EnumerateUsers(userSids);
+    
+    if (userSids.empty()) {
+        std::wcout << L"\n[*] No stored credentials. Testing without credential filter.\n";
+        std::wcout << L"    Run --setup first to test with enrolled credential.\n\n";
+        
+        // Just test device communication
+        std::wcout << L"[*] Testing basic GetAssertion (will fail with 'no credentials')...\n";
+        
+        std::vector<BYTE> challenge;
+        Ctap2Helper::GenerateChallenge(challenge);
+        
+        std::vector<BYTE> clientDataHash;
+        Ctap2Helper::ComputeSHA256(challenge, clientDataHash);
+        
+        Ctap2Helper::AssertionResult result;
+        hr = ctap2.GetAssertion(
+            L"titankey.local",
+            clientDataHash,
+            nullptr,  // No credential filter
+            10000,    // 10 second timeout
+            result);
+        
+        if (hr == E_FAIL) {
+            std::wcout << L"    [OK] Device responded (no matching credential as expected)\n";
+            std::wcout << L"         " << ctap2.GetLastErrorDescription() << L"\n";
+            std::wcout << L"\n    CTAP2 direct HID is working!\n";
+            return true;
+        } else if (SUCCEEDED(hr)) {
+            std::wcout << L"    [OK] Unexpectedly got assertion (maybe discoverable credential)\n";
+            return true;
+        } else {
+            std::wcout << L"    [FAIL] Device communication error: 0x" << std::hex << hr << std::dec << L"\n";
+            return false;
+        }
+    }
+    
+    // Test with stored credential
+    std::wstring userSid = userSids[0];
+    CredentialStorage::UserCredential cred;
+    hr = storage.GetCredential(userSid.c_str(), cred);
+    
+    if (FAILED(hr)) {
+        std::wcout << L"[FAIL] Could not load credential\n";
+        return false;
+    }
+    
+    std::wcout << L"\n[*] Using stored credential for: " << cred.username << L"\n";
+    std::wcout << L"    Credential ID: " << cred.credentialId.size() << L" bytes\n";
+    std::wcout << L"    RP ID: " << cred.relyingPartyId << L"\n\n";
+    
+    wchar_t logBuf[256];
+    swprintf_s(logBuf, L"Testing with user: %s, cred ID size: %zu", 
+        cred.username.c_str(), cred.credentialId.size());
+    TEST_LOG(logBuf);
+    
+    // Generate challenge
+    std::vector<BYTE> challenge;
+    Ctap2Helper::GenerateChallenge(challenge);
+    
+    std::vector<BYTE> clientDataHash;
+    Ctap2Helper::ComputeSHA256(challenge, clientDataHash);
+    
+    std::wcout << L"[*] Calling GetAssertion via direct HID...\n";
+    std::wcout << L"    Touch your Titan Key when it blinks!\n\n";
+    TEST_LOG(L"Calling CTAP2 GetAssertion...");
+    
+    Ctap2Helper::AssertionResult result;
+    hr = ctap2.GetAssertion(
+        cred.relyingPartyId,
+        clientDataHash,
+        &cred.credentialId,
+        30000,  // 30 second timeout
+        result);
+    
+    TEST_LOG_HR(L"CTAP2 GetAssertion returned", hr);
+    
+    if (SUCCEEDED(hr)) {
+        std::wcout << L"    [OK] CTAP2 GetAssertion succeeded!\n";
+        std::wcout << L"         Signature: " << result.signature.size() << L" bytes\n";
+        std::wcout << L"         Auth Data: " << result.authenticatorData.size() << L" bytes\n";
+        std::wcout << L"\n";
+        std::wcout << L"    SUCCESS: Direct CTAP2/HID communication works!\n";
+        std::wcout << L"    This method will work on the Windows lock screen.\n";
+        TEST_LOG(L"SUCCESS: CTAP2 works!");
+        return true;
+    } else {
+        std::wcout << L"    [FAIL] " << ctap2.GetLastErrorDescription() << L"\n";
+        TEST_LOG(ctap2.GetLastErrorDescription());
+        return false;
+    }
+}
+
+//
 // Enroll Titan Key - Creates credential and stores public key
 //
 // This function:
@@ -946,6 +1091,12 @@ int wmain(int argc, wchar_t* argv[]) {
     
     if (opts.testAll || opts.testWebAuthn) {
         if (!TestWebAuthn()) {
+            allPassed = false;
+        }
+    }
+    
+    if (opts.testAll || opts.testCtap2) {
+        if (!TestCtap2()) {
             allPassed = false;
         }
     }

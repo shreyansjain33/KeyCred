@@ -3,6 +3,7 @@
 #include "common.h"
 #include "CredentialStorage.h"
 #include "WebAuthnHelper.h"
+#include "Ctap2Helper.h"
 #include "TpmCrypto.h"
 
 // Forward declarations
@@ -116,5 +117,6 @@ private:
     // Helpers
     CredentialStorage m_credentialStorage;
     WebAuthnHelper m_webAuthn;
+    Ctap2Helper m_ctap2;  // Direct HID for lock screen
     TpmCrypto m_tpmCrypto;
 };
