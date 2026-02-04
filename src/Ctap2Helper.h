@@ -1,5 +1,35 @@
 #pragma once
 
+//==============================================================================
+// Ctap2Helper.h - Direct USB HID communication with FIDO2 security keys
+//==============================================================================
+//
+// This module implements direct communication with FIDO2 authenticators
+// (like Google Titan Key) using the CTAPHID protocol over USB HID.
+//
+// WHY NOT USE WINDOWS WEBAUTHN API?
+// The Windows WebAuthn service (webauthn.dll) requires a UI window handle
+// and doesn't work on the secure desktop (lock screen). By communicating
+// directly with the USB HID device, we bypass this limitation.
+//
+// PROTOCOL SUPPORT:
+// - CTAP2 (FIDO2): Modern protocol with CBOR encoding
+// - U2F (CTAP1): Fallback for older keys (like first-gen Titan Keys)
+//
+// COMMUNICATION FLOW:
+// 1. Find FIDO2 device by scanning HID devices for FIDO usage page (0xF1D0)
+// 2. Initialize channel using CTAPHID_INIT with broadcast CID
+// 3. Send commands using CTAPHID_CBOR (CTAP2) or CTAPHID_MSG (U2F)
+// 4. Handle keepalive messages while waiting for user touch
+// 5. Receive and parse response
+//
+// SECURITY CONSIDERATIONS:
+// - Uses overlapped I/O for cancellable operations (user can switch tiles)
+// - Validates all CBOR responses to prevent malformed data attacks
+// - Clears sensitive data from memory after use
+//
+//==============================================================================
+
 #include "common.h"
 #include <hidsdi.h>
 #include <SetupAPI.h>

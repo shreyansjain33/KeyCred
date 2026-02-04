@@ -1,5 +1,30 @@
 #pragma once
 
+//==============================================================================
+// TitanKeyCredential.h - Individual credential tile implementation
+//==============================================================================
+//
+// This class represents a single login tile in the Windows credential UI.
+// Each tile corresponds to a user who has enrolled their Titan Key.
+//
+// AUTHENTICATION FLOW:
+// 1. User selects the Titan Key tile on the lock screen
+// 2. SetSelected() triggers Connect() which calls PerformAuthentication()
+// 3. Ctap2Helper communicates directly with the Titan Key via USB HID
+// 4. User touches the key, providing cryptographic proof of possession
+// 5. TpmCrypto decrypts the stored password using the TPM-protected key
+// 6. GetSerialization() packages credentials for Windows LSA
+// 7. Windows authenticates the user and unlocks the session
+//
+// KEY DESIGN DECISIONS:
+// - Uses direct USB HID (Ctap2Helper) instead of Windows WebAuthn service
+//   because WebAuthn UI doesn't work on the secure desktop (lock screen)
+// - Falls back to U2F (CTAP1) for older Titan Keys that don't support CTAP2
+// - Uses IConnectableCredentialProviderCredential for async operations
+//   which allows the authentication to be cancelled if user switches tiles
+//
+//==============================================================================
+
 #include "common.h"
 #include "CredentialStorage.h"
 #include "WebAuthnHelper.h"

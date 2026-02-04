@@ -1,5 +1,31 @@
 #pragma once
 
+//==============================================================================
+// TitanKeyCredentialProvider.h - Main credential provider implementation
+//==============================================================================
+//
+// This is the main entry point for the Windows Credential Provider.
+// Windows LogonUI loads this COM object to enumerate available login options.
+//
+// RESPONSIBILITIES:
+// - Enumerate users who have enrolled Titan Keys
+// - Create TitanKeyCredential instances for each eligible user
+// - Manage the lifecycle of credential tiles
+// - Respond to Windows credential provider events
+//
+// COM REGISTRATION:
+// - CLSID: {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+// - Registered under: HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\
+//                     Authentication\Credential Providers\{CLSID}
+//
+// SUPPORTED SCENARIOS:
+// - CPUS_LOGON: Initial Windows logon
+// - CPUS_UNLOCK_WORKSTATION: Unlocking a locked workstation
+// - CPUS_CREDUI: Credential UI prompts (e.g., UAC)
+// - CPUS_PLAP: Pre-logon access provider (network selection)
+//
+//==============================================================================
+
 #include "common.h"
 #include "TitanKeyCredential.h"
 #include "CredentialStorage.h"

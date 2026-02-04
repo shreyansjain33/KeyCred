@@ -5,6 +5,7 @@ x64/
 x86/
 Debug/
 Release/
+bin/
 
 # Visual Studio
 .vs/
@@ -18,6 +19,7 @@ Release/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
+Makefile
 
 # Compiled files
 *.dll
@@ -34,6 +36,16 @@ Thumbs.db
 
 # IDE
 .idea/
+.vscode/
+.cursor/
 *.swp
 *.swo
-build.log
+
+# Log files
+*.log
+TitanKeyCP_*.log
+
+# Credentials (never commit!)
+credentials.json
+*.key
+*.pem

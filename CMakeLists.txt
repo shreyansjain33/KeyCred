@@ -21,7 +21,6 @@ set(SOURCES
     src/WebAuthnHelper.cpp
     src/Ctap2Helper.cpp
     src/CredentialStorage.cpp
-    src/CryptoHelper.cpp
     src/TpmCrypto.cpp
 )
 
@@ -32,7 +31,6 @@ set(HEADERS
     src/WebAuthnHelper.h
     src/Ctap2Helper.h
     src/CredentialStorage.h
-    src/CryptoHelper.h
     src/TpmCrypto.h
     src/resource.h
     include/common.h
@@ -83,7 +81,6 @@ add_executable(TestTitanKeyCP
     src/CredentialStorage.cpp
     src/WebAuthnHelper.cpp
     src/Ctap2Helper.cpp
-    src/CryptoHelper.cpp
     src/TpmCrypto.cpp
 )
 
@@ -113,10 +110,4 @@ set_target_properties(TestTitanKeyCP PROPERTIES
 install(TARGETS TitanKeyCP TestTitanKeyCP
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
-)
-
-install(DIRECTORY tools/
-    DESTINATION tools
-    FILES_MATCHING PATTERN "*.ps1"
-    PATTERN "*.bat"
 )

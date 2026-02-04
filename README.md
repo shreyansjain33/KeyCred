@@ -1,200 +1,295 @@
-# Titan Key Windows Credential Provider
+# Titan Key Credential Provider for Windows
 
-A Windows Credential Provider that enables authentication using Google Titan Security Key (FIDO2/WebAuthn).
+A Windows Credential Provider that enables login to Windows using a FIDO2 security key (such as Google Titan Key) instead of typing a password.
+
+![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![FIDO2](https://img.shields.io/badge/FIDO2-U2F%20%7C%20CTAP2-orange)
 
 ## Overview
 
-This credential provider allows users to log into Windows using their Titan Security Key instead of typing a password. The Windows password is stored encrypted in the registry and is only decrypted after successful authentication with the Titan Key.
+This credential provider allows you to unlock your Windows workstation by simply touching your FIDO2 security key. Your Windows password is stored encrypted on your machine, protected by TPM hardware, and can only be decrypted after successful authentication with your physical security key.
+
+### Key Features
+
+- **Hardware-backed security**: Password encrypted with TPM-protected keys
+- **FIDO2/U2F support**: Works with modern CTAP2 keys and legacy U2F keys
+- **Lock screen compatible**: Direct USB HID communication bypasses Windows WebAuthn limitations
+- **Multi-user support**: Each user can enroll their own security key
+- **Cancellable operations**: Switch to password login if needed
+
+## Security Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Windows Lock Screen                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐                    │
+│  │  Titan Key Tile │    │  Password Tile  │                    │
+│  │  (This Project) │    │   (Built-in)    │                    │
+│  └────────┬────────┘    └─────────────────┘                    │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                           │
+│  │  Ctap2Helper    │  Direct USB HID communication             │
+│  │  (CTAP2 + U2F)  │  No Windows WebAuthn service needed       │
+│  └────────┬────────┘                                           │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                           │
+│  │  Google Titan   │  User touches key = cryptographic proof   │
+│  │  Key (USB)      │  of physical possession                   │
+│  └────────┬────────┘                                           │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                           │
+│  │  TpmCrypto      │  TPM unwraps AES key, decrypts password   │
+│  │  (TPM + AES)    │  Hardware-bound, non-extractable          │
+│  └────────┬────────┘                                           │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                           │
+│  │  Windows LSA    │  Standard KERB_INTERACTIVE_UNLOCK_LOGON   │
+│  │  (Login)        │  Same as password login                   │
+│  └─────────────────┘                                           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Encryption Flow
+
+1. **Setup (one-time)**:
+   - User enrolls Titan Key via WebAuthn API
+   - TPM generates RSA-2048 key pair (private key never leaves TPM)
+   - Random AES-256 key encrypts the Windows password
+   - AES key is wrapped (encrypted) with TPM public key
+   - Encrypted blob stored in registry
+
+2. **Login (each time)**:
+   - User selects Titan Key tile on lock screen
+   - Credential provider sends challenge to Titan Key via USB HID
+   - User touches key → signature proves possession
+   - TPM unwraps AES key using RSA private key
+   - AES-GCM decrypts password
+   - Password submitted to Windows for authentication
 
 ## Requirements
 
-- Windows 10 version 1809 (Build 17763) or later
-- Visual Studio 2019 or later with C++ desktop development workload
-- Windows SDK 10.0.17763.0 or later
-- CMake 3.16 or later
-- Google Titan Security Key or any FIDO2-compatible security key
+- Windows 10 (version 1903+) or Windows 11
+- TPM 2.0 (most modern PCs have this)
+- FIDO2 security key (Google Titan Key, YubiKey, etc.)
+- Visual Studio 2019+ or Build Tools
+- Windows SDK 10.0.18362.0+
+- CMake 3.16+
 
 ## Building
 
-### Using CMake (Command Line)
+### Using GitHub Actions (Recommended)
+
+The project includes a GitHub Actions workflow that builds release binaries:
+
+1. Push to GitHub
+2. Go to Actions → Build → Download artifacts
+3. Extract `TitanKeyCP.dll` and `TestTitanKeyCP.exe`
+
+### Building Locally
 
 ```powershell
+# Clone the repository
+git clone https://github.com/yourusername/KeyCred.git
+cd KeyCred
+
 # Create build directory
 mkdir build
 cd build
 
-# Configure (use appropriate generator for your VS version)
+# Generate project files
 cmake .. -G "Visual Studio 17 2022" -A x64
 
-# Build
+# Build Release
 cmake --build . --config Release
+
+# Output: build/bin/Release/TitanKeyCP.dll
+#         build/bin/Release/TestTitanKeyCP.exe
 ```
-
-### Using Visual Studio
-
-1. Open the folder in Visual Studio
-2. CMake should automatically configure
-3. Build the solution (Ctrl+Shift+B)
 
 ## Installation
 
-### 1. Register the Credential Provider
+### Quick Install (Recommended)
 
-Run as Administrator (choose one method):
+1. **Build** the project (see Building section) or download from [Releases](../../releases)
+2. **Run** `Install.bat` as Administrator
 
-**Using Batch Script:**
-```batch
-.\tools\Register.bat
+That's it! The installer will:
+- Find the built DLL and EXE in the `build/` folder
+- Enroll your Titan Key (touch when it blinks)
+- Create TPM-protected encryption
+- Register the credential provider
+
+### Testing Without Installing
+
+```cmd
+Test.bat
 ```
 
-**Using PowerShell:**
-```powershell
-.\tools\RegisterCredential.ps1
-```
+This lets you test USB communication with your Titan Key before full installation.
 
-**Using regsvr32:**
-```batch
-regsvr32 TitanKeyCP.dll
-```
+## Usage
 
-### 2. Setup User Credentials
+### Daily Use
 
-For each user that will use Titan Key authentication:
+1. Lock your workstation (`Win + L`)
+2. Click on "Titan Key Login" tile
+3. Touch your security key when it blinks
+4. Done! You're logged in.
 
-**Using Test Tool (recommended):**
-```batch
-TestTitanKeyCP.exe --setup --user "YourUsername" --password "YourPassword"
-```
+### Switching to Password
 
-**Using PowerShell:**
-```powershell
-.\tools\SetupCredential.ps1 -Username "YourUsername" -Password "YourPassword"
-```
+If your Titan Key isn't available, simply click on your user tile to use password login instead.
 
-For testing, use password "1234":
-```batch
-TestTitanKeyCP.exe --setup --user "TestUser" --password "1234"
-```
-
-### 3. Enroll the Titan Key
-
-The setup process will store credentials that are released when the Titan Key is touched.
-
-## Uninstallation
-
-Run as Administrator:
-
-**Using Batch Script:**
-```batch
-.\tools\Unregister.bat
-```
-
-**Using PowerShell:**
-```powershell
-.\tools\UnregisterCredential.ps1
-```
-
-## Architecture
+### Available Commands
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Windows    │────▶│  TitanKeyCP.dll  │────▶│  Titan Key  │
-│  LogonUI    │     │  (Cred Provider) │     │  (FIDO2)    │
-└─────────────┘     └──────────────────┘     └─────────────┘
-                            │
-                            ▼
-                    ┌──────────────────┐
-                    │  webauthn.dll    │
-                    │  (Windows API)   │
-                    └──────────────────┘
-                            │
-                            ▼
-                    ┌──────────────────┐
-                    │    Registry      │
-                    │ (Encrypted Cred) │
-                    └──────────────────┘
+TestTitanKeyCP.exe [options]
+
+Options:
+  --help              Show help message
+  --setup             Enroll Titan Key and encrypt password
+  --user <username>   Username for setup
+  --password <pass>   Password for setup
+  --list              List enrolled credentials
+  --reset             Delete all credentials and keys
+  --test-ctap2        Test direct USB HID communication
+  --test-storage      Test TPM encryption
 ```
-
-## Security Model
-
-**TPM + Signature Verification:**
-
-This credential provider uses a two-factor approach combining TPM hardware encryption with Titan Key signature verification:
-
-1. **Enrollment**:
-   - Create credential on Titan Key (stores public key)
-   - Create TPM-backed RSA key via Windows CNG
-   - Generate random AES-256 key, encrypt password
-   - Wrap AES key with TPM RSA key
-   - Store: wrapped key + encrypted password + credential ID + public key
-
-2. **Authentication**:
-   - Titan Key signs a random challenge (physical presence proof)
-   - Signature verified via Windows WebAuthn API
-   - TPM unwraps the AES key (hardware-protected)
-   - Password decrypted with AES-256-GCM
-
-**Security Guarantees:**
-- TPM key cannot be extracted even with admin access
-- Titan Key signature required for login (physical presence)
-- AES-256-GCM provides authenticated encryption
-- Registry keys protected with ACLs (SYSTEM + Admins only)
-- Works with all FIDO2 keys (not limited to hmac-secret support)
-
-## Testing
-
-### Using the Test Tool (Without Locking System)
-
-The `TestTitanKeyCP.exe` tool lets you verify everything works without locking your system:
-
-```batch
-:: Run all tests
-TestTitanKeyCP.exe --test-all
-
-:: Test individual components
-TestTitanKeyCP.exe --test-registration    :: Check DLL is registered
-TestTitanKeyCP.exe --test-storage         :: Test DPAPI encryption
-TestTitanKeyCP.exe --test-webauthn        :: Test Titan Key interaction
-
-:: Setup credentials for a user
-TestTitanKeyCP.exe --setup --user "TestUser" --password "1234"
-
-:: List stored credentials
-TestTitanKeyCP.exe --list
-```
-
-### Full Integration Test (Requires Locking)
-
-For complete end-to-end testing with password "1234":
-
-1. Build the project (see Building section)
-2. Run as Admin: `Register.bat` or `regsvr32 TitanKeyCP.dll`
-3. Setup credentials: `TestTitanKeyCP.exe --setup --user "YourUser" --password "1234"`
-4. Verify setup: `TestTitanKeyCP.exe --test-all`
-5. Lock your workstation (Win+L)
-6. Click the "Titan Key" tile for your user
-7. Touch your Titan Key when prompted
-8. You should be logged in
 
 ## Troubleshooting
 
-### The credential provider doesn't appear
+### "Touch your security key" but nothing happens
 
-1. Verify the DLL is registered: Check `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers`
-2. Check Event Viewer for errors
-3. Enable debug logging by building in Debug configuration
+- Make sure your Titan Key is properly connected
+- Try unplugging and reconnecting the key
+- Check Device Manager for FIDO devices
 
-### Titan Key not responding
+### Login fails after touching key
 
-1. Ensure the key is properly connected
-2. Try a different USB port
-3. Check Device Manager for driver issues
+- Re-run setup: `TestTitanKeyCP.exe --reset` then `--setup`
+- Check logs at `C:\TitanKeyCP_debug.log`
+- Verify TPM is enabled in BIOS
 
-### Authentication fails
+### Credential provider doesn't appear
 
-1. Verify the user's credentials are stored: Check `HKLM\SOFTWARE\TitanKeyCP\Credentials`
-2. Re-run SetupCredential.ps1 to re-enroll
+- Verify DLL is registered: `regsvr32 TitanKeyCP.dll`
+- Check registry: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}`
+
+### Debug Logging
+
+Logs are written to `C:\TitanKeyCP_debug.log`. View with any text editor or use:
+
+```powershell
+Get-Content C:\TitanKeyCP_debug.log -Tail 50 -Wait
+```
+
+## Uninstallation
+
+Run `Uninstall.bat` as Administrator.
+
+This removes:
+- Credential provider registration
+- Stored credentials from registry
+- TPM encryption keys
+
+You can still login with your normal Windows password after uninstalling.
+
+## Project Structure
+
+```
+KeyCred/
+├── Install.bat               # Complete installer (run as Admin)
+├── Uninstall.bat             # Complete uninstaller
+├── Test.bat                  # Interactive test menu
+├── build/                    # Build output (created by CMake)
+│   └── bin/Release/
+│       ├── TitanKeyCP.dll    # The credential provider
+│       └── TestTitanKeyCP.exe # Setup/test utility
+├── include/
+│   └── common.h              # Shared definitions
+├── src/
+│   ├── TitanKeyCredentialProvider.cpp/h  # Main CP implementation
+│   ├── TitanKeyCredential.cpp/h          # Individual tile logic
+│   ├── Ctap2Helper.cpp/h                 # USB HID FIDO2/U2F
+│   ├── TpmCrypto.cpp/h                   # TPM encryption
+│   ├── CredentialStorage.cpp/h           # Registry storage
+│   ├── WebAuthnHelper.cpp/h              # WebAuthn for enrollment
+│   ├── TestTitanKeyCP.cpp                # Test/setup utility
+│   ├── dll.cpp                           # DLL entry points
+│   └── guid.h                            # COM GUIDs
+├── res/
+│   └── TitanKeyCP.rc                     # Resources
+├── CMakeLists.txt                        # Build configuration
+└── TitanKeyCP.def                        # DLL exports
+```
+
+The scripts automatically find binaries in `build/bin/Release/` or `build/bin/Debug/`.
+
+## Technical Details
+
+### Why Direct USB HID?
+
+Windows WebAuthn API (`webauthn.dll`) requires a window handle and shows a system UI dialog. This doesn't work on the secure desktop (lock screen) because:
+- The credential provider runs as SYSTEM
+- SYSTEM cannot create UI windows on the user's desktop
+- The secure desktop is isolated from normal applications
+
+By communicating directly via USB HID using the CTAPHID protocol, we bypass these limitations entirely.
+
+### Protocol Support
+
+- **CTAP2**: Modern FIDO2 protocol with CBOR encoding
+- **U2F (CTAP1)**: Fallback for older keys that don't support CTAP2
+
+First-generation Google Titan Keys only support U2F, so the fallback is essential.
+
+### TPM Key Storage
+
+Keys are stored in the machine-wide key store (`NCRYPT_MACHINE_KEY_FLAG`) because the credential provider runs as SYSTEM on the lock screen and cannot access user-specific key stores.
+
+## Security Considerations
+
+- **Password is stored encrypted**: Never in plaintext
+- **TPM-bound encryption**: Private key cannot be extracted
+- **Physical security key required**: Touch proves possession
+- **No network dependency**: Works completely offline
+- **Fallback available**: Password login always works
+
+### Limitations
+
+- Password changes require re-enrollment
+- Stolen laptop with TPM could be brute-forced (use BitLocker!)
+- Security key loss means password login required
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## License
 
-This project is provided as-is for educational purposes.
+MIT License - See [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- [FIDO Alliance](https://fidoalliance.org/) for CTAP2/U2F specifications
+- [Windows Credential Provider Samples](https://github.com/microsoft/Windows-classic-samples) from Microsoft
+- Google Titan Key team for excellent hardware
+
+## References
+
+- [CTAP2 Specification](https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html)
+- [Windows Credential Provider Technical Reference](https://docs.microsoft.com/en-us/windows/win32/secauthn/credential-providers-in-windows)
+- [NCrypt TPM Key Storage Provider](https://docs.microsoft.com/en-us/windows/win32/seccng/key-storage-providers)

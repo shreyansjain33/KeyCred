@@ -14,7 +14,6 @@
 #include "CredentialStorage.h"
 #include "WebAuthnHelper.h"
 #include "Ctap2Helper.h"
-#include "CryptoHelper.h"
 #include "TpmCrypto.h"
 
 #include <iostream>

@@ -1,5 +1,37 @@
 #pragma once
 
+//==============================================================================
+// TpmCrypto.h - TPM-backed password encryption using Windows CNG
+//==============================================================================
+//
+// This module provides hardware-backed encryption for storing Windows
+// passwords securely. The password can only be decrypted by the same machine
+// that encrypted it, using TPM-protected keys.
+//
+// ENCRYPTION SCHEME:
+// 1. Generate random 256-bit AES key for each encryption
+// 2. Encrypt password with AES-256-GCM (authenticated encryption)
+// 3. Wrap (encrypt) AES key with TPM RSA-2048 using OAEP padding
+// 4. Store: wrapped_key_len(4) || wrapped_key || nonce(12) || ciphertext || tag(16)
+//
+// WHY TPM + AES HYBRID?
+// - TPM RSA is slow and has size limits (max ~190 bytes with OAEP)
+// - AES-GCM is fast and handles arbitrary data sizes
+// - AES key changes per encryption (forward secrecy if old data leaked)
+// - TPM protects the AES key - cannot be extracted even by admin
+//
+// KEY STORAGE:
+// - Uses NCRYPT_MACHINE_KEY_FLAG to store in machine-wide key store
+// - Required because credential providers run as SYSTEM on lock screen
+// - User-specific keys would not be accessible from SYSTEM context
+//
+// SECURITY PROPERTIES:
+// - Hardware-bound: Key material never leaves TPM
+// - Authenticated: GCM tag detects tampering
+// - Unique nonces: Random 96-bit nonce per encryption
+//
+//==============================================================================
+
 #include "common.h"
 #include <ncrypt.h>
 

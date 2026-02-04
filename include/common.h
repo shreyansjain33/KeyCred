@@ -1,5 +1,22 @@
 #pragma once
 
+//==============================================================================
+// common.h - Shared definitions for Titan Key Credential Provider
+//==============================================================================
+//
+// This file contains common includes, macros, and utility classes used
+// throughout the Titan Key Credential Provider project.
+//
+// Key components:
+//   - Windows SDK compatibility definitions
+//   - WebAuthn API version constants
+//   - Credential provider field definitions
+//   - Debug logging infrastructure
+//   - COM helper classes (ComPtr)
+//   - Secure string handling (SecureString)
+//
+//==============================================================================
+
 // Windows headers
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -136,11 +153,14 @@ enum TITAN_KEY_FIELD_ID {
     TKFI_NUM_FIELDS = 5
 };
 
-// File logging for debugging at lock screen
+// File logging for debugging credential provider operations
+// Logs are written to C:\TitanKeyCP_debug.log (accessible from lock screen context)
+// Also outputs to debug console (viewable with DebugView)
 inline void TitanLogToFile(const WCHAR* msg) {
-    // Write to file
+    // Use C:\ root for lock screen accessibility (SYSTEM account can write here)
+    // Alternative: Use %PROGRAMDATA%\TitanKeyCP\debug.log
     HANDLE hFile = CreateFileW(
-        L"B:\\Libraries\\Downloads\\TitanKeyCP_debug.log",
+        L"C:\\TitanKeyCP_debug.log",
         FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
@@ -150,7 +170,6 @@ inline void TitanLogToFile(const WCHAR* msg) {
     if (hFile != INVALID_HANDLE_VALUE) {
         SYSTEMTIME st;
         GetLocalTime(&st);
-        // Convert to ANSI for simpler file output
         char buf[1024];
         char msgAnsi[512];
         WideCharToMultiByte(CP_ACP, 0, msg, -1, msgAnsi, sizeof(msgAnsi), NULL, NULL);
@@ -160,6 +179,7 @@ inline void TitanLogToFile(const WCHAR* msg) {
         WriteFile(hFile, buf, (DWORD)strlen(buf), &written, NULL);
         CloseHandle(hFile);
     }
+    // Also output to debug console
     OutputDebugStringW(L"[TitanKeyCP] ");
     OutputDebugStringW(msg);
     OutputDebugStringW(L"\n");
