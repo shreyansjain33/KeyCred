@@ -23,7 +23,8 @@ public:
 
     // Create or open a persistent TPM key for this user
     // keyName should be unique per user (e.g., "TitanKeyCP_<UserSID>")
-    HRESULT OpenOrCreateKey(PCWSTR keyName);
+    // If forceRecreate is true, deletes existing key and creates fresh one
+    HRESULT OpenOrCreateKey(PCWSTR keyName, BOOL forceRecreate = FALSE);
 
     // Encrypt data using TPM-protected key
     // Internally: generates AES key, encrypts data, wraps AES key with TPM RSA

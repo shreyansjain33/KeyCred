@@ -63,7 +63,7 @@ HRESULT TpmCrypto::Initialize() {
 // This is required because credential providers run as SYSTEM on the lock screen
 // and cannot access user-specific key stores.
 //
-HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
+HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName, BOOL forceRecreate) {
     TITAN_LOG(L"TpmCrypto::OpenOrCreateKey");
 
     if (!m_hProvider) {
@@ -76,7 +76,27 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
 
     m_keyName = keyName;
 
-    // Try to open existing key first (from machine key store)
+    // If forceRecreate, delete existing key first
+    if (forceRecreate) {
+        TITAN_LOG(L"Force recreate requested - deleting existing key if any");
+        NCRYPT_KEY_HANDLE hExistingKey = 0;
+        SECURITY_STATUS delStatus = NCryptOpenKey(
+            m_hProvider,
+            &hExistingKey,
+            keyName,
+            0,
+            NCRYPT_MACHINE_KEY_FLAG);
+        
+        if (SUCCEEDED(delStatus) && hExistingKey) {
+            TITAN_LOG(L"Found existing key - deleting it");
+            NCryptDeleteKey(hExistingKey, 0);  // This also frees the handle
+            TITAN_LOG(L"Existing key deleted");
+        } else {
+            TITAN_LOG(L"No existing key found to delete");
+        }
+    }
+
+    // Try to open existing key (from machine key store)
     SECURITY_STATUS status = NCryptOpenKey(
         m_hProvider,
         &m_hKey,
@@ -84,12 +104,12 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
         0,
         NCRYPT_MACHINE_KEY_FLAG);  // Use machine key store
 
-    if (SUCCEEDED(status)) {
+    if (SUCCEEDED(status) && !forceRecreate) {
         TITAN_LOG(L"Opened existing TPM key from machine store");
         return S_OK;
     }
 
-    // Key doesn't exist, create new one in machine key store
+    // Key doesn't exist (or forceRecreate), create new one in machine key store
     TITAN_LOG(L"Creating new TPM key in machine store");
 
     status = NCryptCreatePersistedKey(
@@ -153,8 +173,8 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
         return HRESULT_FROM_WIN32(status);
     }
 
-    // Finalize the key
-    status = NCryptFinalizeKey(m_hKey, NCRYPT_MACHINE_KEY_FLAG);
+    // Finalize the key (no flags needed - machine key flag was set during creation)
+    status = NCryptFinalizeKey(m_hKey, 0);
 
     if (FAILED(status)) {
         NCryptFreeObject(m_hKey);

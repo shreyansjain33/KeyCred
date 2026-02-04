@@ -253,9 +253,9 @@ bool TestCredentialStorage() {
         std::wcout << L"    [OK] TPM/CNG available\n";
     }
     
-    // Create test key
-    std::wcout << L"[*] Creating test key...\n";
-    hr = tpm.OpenOrCreateKey(L"TitanKeyCP_TEST");
+    // Create test key (force recreate to ensure proper permissions)
+    std::wcout << L"[*] Creating test key (force recreate)...\n";
+    hr = tpm.OpenOrCreateKey(L"TitanKeyCP_TEST", TRUE);
     
     if (FAILED(hr)) {
         std::wcout << L"    [FAIL] Could not create key: 0x" << std::hex << hr << std::dec << L"\n";
@@ -987,16 +987,17 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
         std::wcout << L"    [OK] TPM/CNG initialized\n";
     }
 
-    // Create/open key for this user
+    // Create FRESH key for this user (forceRecreate=TRUE to ensure proper permissions)
     std::wstring keyName = L"TitanKeyCP_";
     keyName += userSid;
     
-    hr = tpm.OpenOrCreateKey(keyName.c_str());
+    std::wcout << L"    Creating fresh TPM key (deleting old if exists)...\n";
+    hr = tpm.OpenOrCreateKey(keyName.c_str(), TRUE);  // Force recreate to get proper decrypt permissions
     if (FAILED(hr)) {
         std::wcout << L"    [FAIL] Could not create TPM key: 0x" << std::hex << hr << std::dec << L"\n";
         return false;
     }
-    std::wcout << L"    [OK] TPM key ready\n";
+    std::wcout << L"    [OK] TPM key created with decrypt permissions\n";
 
     // Encrypt the password using TPM
     std::wcout << L"\n[*] Encrypting password with TPM...\n";
