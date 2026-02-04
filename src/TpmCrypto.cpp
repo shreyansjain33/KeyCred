@@ -34,7 +34,7 @@ HRESULT TpmCrypto::Initialize() {
 
     // Try TPM provider first
     SECURITY_STATUS status = NCryptOpenStorageProvider(&m_hProvider, TPM_PROVIDER, 0);
-    
+
     if (SUCCEEDED(status)) {
         m_isAvailable = TRUE;
         TITAN_LOG(L"TPM provider opened successfully");
@@ -45,7 +45,7 @@ HRESULT TpmCrypto::Initialize() {
 
     // Fallback to software key storage
     status = NCryptOpenStorageProvider(&m_hProvider, SOFTWARE_PROVIDER, 0);
-    
+
     if (SUCCEEDED(status)) {
         m_isAvailable = TRUE;
         TITAN_LOG(L"Software provider opened successfully");
@@ -86,7 +86,7 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName, BOOL forceRecreate) {
             keyName,
             0,
             NCRYPT_MACHINE_KEY_FLAG);
-        
+
         if (SUCCEEDED(delStatus) && hExistingKey) {
             TITAN_LOG(L"Found existing key - deleting it");
             NCryptDeleteKey(hExistingKey, 0);  // This also frees the handle
@@ -260,16 +260,16 @@ HRESULT TpmCrypto::Encrypt(
 
         // Build output: wrapped_key_len(4) || wrapped_key || aes_encrypted
         encryptedBlob.reserve(4 + wrappedKeySize + aesEncrypted.size());
-        
+
         // Write wrapped key length (4 bytes, little-endian)
         encryptedBlob.push_back((BYTE)(wrappedKeySize & 0xFF));
         encryptedBlob.push_back((BYTE)((wrappedKeySize >> 8) & 0xFF));
         encryptedBlob.push_back((BYTE)((wrappedKeySize >> 16) & 0xFF));
         encryptedBlob.push_back((BYTE)((wrappedKeySize >> 24) & 0xFF));
-        
+
         // Write wrapped key
         encryptedBlob.insert(encryptedBlob.end(), wrappedKey.begin(), wrappedKey.end());
-        
+
         // Write AES-encrypted data
         encryptedBlob.insert(encryptedBlob.end(), aesEncrypted.begin(), aesEncrypted.end());
 
@@ -296,7 +296,7 @@ HRESULT TpmCrypto::Decrypt(
         TITAN_LOG(L"Decrypt: No key handle");
         return E_INVALIDARG;
     }
-    
+
     if (encryptedBlob.size() < 4) {
         TITAN_LOG(L"Decrypt: Blob too small");
         return E_INVALIDARG;
@@ -341,52 +341,47 @@ HRESULT TpmCrypto::Decrypt(
         oaepInfo.pbLabel = nullptr;
         oaepInfo.cbLabel = 0;
 
-        // Unwrap AES key using TPM - get size first
-        DWORD aesKeySize = 0;
+        // Unwrap AES key using TPM
+        // Note: NCryptDecrypt with NULL buffer returns max possible size (RSA modulus = 256),
+        // not actual decrypted size. So we allocate RSA modulus size and check actual result.
+        BYTE decryptBuffer[256] = { 0 };  // RSA-2048 modulus size
+        DWORD actualDecryptedSize = 0;
+
         SECURITY_STATUS secStatus = NCryptDecrypt(
             m_hKey,
             const_cast<BYTE*>(wrappedKey),
             wrappedKeySize,
             &oaepInfo,
-            nullptr,
-            0,
-            &aesKeySize,
+            decryptBuffer,
+            sizeof(decryptBuffer),
+            &actualDecryptedSize,
             NCRYPT_PAD_OAEP_FLAG);
 
         if (FAILED(secStatus)) {
             WCHAR buf[128];
-            swprintf_s(buf, L"Decrypt: NCryptDecrypt (get size) failed: 0x%08X", secStatus);
+            swprintf_s(buf, L"Decrypt: NCryptDecrypt failed: 0x%08X", secStatus);
             TitanLogToFile(buf);
             hr = HRESULT_FROM_WIN32(secStatus);
             break;
         }
 
-        if (aesKeySize != AES_KEY_SIZE) {
+        {
             WCHAR buf[128];
-            swprintf_s(buf, L"Decrypt: AES key size mismatch: expected %d, got %u", AES_KEY_SIZE, aesKeySize);
+            swprintf_s(buf, L"Decrypt: Actual decrypted size = %u bytes", actualDecryptedSize);
+            TitanLogToFile(buf);
+        }
+
+        if (actualDecryptedSize != AES_KEY_SIZE) {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: AES key size mismatch: expected %d, got %u", AES_KEY_SIZE, actualDecryptedSize);
             TitanLogToFile(buf);
             hr = E_FAIL;
             break;
         }
 
-        // Actually decrypt
-        secStatus = NCryptDecrypt(
-            m_hKey,
-            const_cast<BYTE*>(wrappedKey),
-            wrappedKeySize,
-            &oaepInfo,
-            aesKey,
-            AES_KEY_SIZE,
-            &aesKeySize,
-            NCRYPT_PAD_OAEP_FLAG);
-
-        if (FAILED(secStatus)) {
-            WCHAR buf[128];
-            swprintf_s(buf, L"Decrypt: NCryptDecrypt (decrypt) failed: 0x%08X", secStatus);
-            TitanLogToFile(buf);
-            hr = HRESULT_FROM_WIN32(secStatus);
-            break;
-        }
+        // Copy decrypted AES key
+        memcpy(aesKey, decryptBuffer, AES_KEY_SIZE);
+        SecureZeroMemory(decryptBuffer, sizeof(decryptBuffer));
 
         TITAN_LOG(L"Decrypt: AES key unwrapped successfully");
 
@@ -402,7 +397,7 @@ HRESULT TpmCrypto::Decrypt(
 
         // Decrypt with AES-GCM
         hr = AesGcmDecrypt(aesKey, AES_KEY_SIZE, aesEncrypted, aesEncryptedSize, plaintext);
-        
+
         if (FAILED(hr)) {
             WCHAR buf[128];
             swprintf_s(buf, L"Decrypt: AesGcmDecrypt failed: 0x%08X", hr);
@@ -467,7 +462,7 @@ HRESULT TpmCrypto::DeleteKey() {
     if (m_hKey) {
         SECURITY_STATUS status = NCryptDeleteKey(m_hKey, 0);
         m_hKey = 0;
-        
+
         if (FAILED(status)) {
             return HRESULT_FROM_WIN32(status);
         }
