@@ -137,8 +137,24 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
         return HRESULT_FROM_WIN32(status);
     }
 
+    // Set key usage - allow decryption (required for unwrapping AES key)
+    DWORD keyUsage = NCRYPT_ALLOW_DECRYPT_FLAG;
+    status = NCryptSetProperty(
+        m_hKey,
+        NCRYPT_KEY_USAGE_PROPERTY,
+        (PBYTE)&keyUsage,
+        sizeof(keyUsage),
+        0);
+
+    if (FAILED(status)) {
+        NCryptFreeObject(m_hKey);
+        m_hKey = 0;
+        TITAN_LOG_HR(L"NCryptSetProperty (key usage) failed", status);
+        return HRESULT_FROM_WIN32(status);
+    }
+
     // Finalize the key
-    status = NCryptFinalizeKey(m_hKey, 0);
+    status = NCryptFinalizeKey(m_hKey, NCRYPT_MACHINE_KEY_FLAG);
 
     if (FAILED(status)) {
         NCryptFreeObject(m_hKey);
@@ -423,7 +439,7 @@ HRESULT TpmCrypto::DecryptPassword(const std::vector<BYTE>& encryptedBlob, Secur
 }
 
 //
-// DeleteKey - Delete the persistent key
+// DeleteKey - Delete the persistent key (currently open)
 //
 HRESULT TpmCrypto::DeleteKey() {
     TITAN_LOG(L"TpmCrypto::DeleteKey");
@@ -435,6 +451,63 @@ HRESULT TpmCrypto::DeleteKey() {
         if (FAILED(status)) {
             return HRESULT_FROM_WIN32(status);
         }
+    }
+
+    return S_OK;
+}
+
+//
+// DeleteKeyByName - Delete a key by name (static)
+//
+HRESULT TpmCrypto::DeleteKeyByName(PCWSTR keyName) {
+    TITAN_LOG(L"TpmCrypto::DeleteKeyByName");
+
+    if (!keyName || !*keyName) {
+        return E_INVALIDARG;
+    }
+
+    NCRYPT_PROV_HANDLE hProvider = 0;
+    NCRYPT_KEY_HANDLE hKey = 0;
+    HRESULT hr = S_OK;
+
+    // Try TPM provider first
+    SECURITY_STATUS status = NCryptOpenStorageProvider(&hProvider, MS_PLATFORM_CRYPTO_PROVIDER, 0);
+    if (FAILED(status)) {
+        // Try software provider
+        status = NCryptOpenStorageProvider(&hProvider, MS_KEY_STORAGE_PROVIDER, 0);
+        if (FAILED(status)) {
+            return HRESULT_FROM_WIN32(status);
+        }
+    }
+
+    // Try to open and delete from machine store
+    status = NCryptOpenKey(hProvider, &hKey, keyName, 0, NCRYPT_MACHINE_KEY_FLAG);
+    if (SUCCEEDED(status)) {
+        TITAN_LOG(L"Deleting key from machine store");
+        status = NCryptDeleteKey(hKey, 0);
+        hKey = 0;  // DeleteKey frees the handle
+        if (FAILED(status)) {
+            TITAN_LOG_HR(L"Failed to delete machine key", status);
+        } else {
+            TITAN_LOG(L"Machine key deleted successfully");
+        }
+    }
+
+    // Also try user store (in case old key exists there)
+    status = NCryptOpenKey(hProvider, &hKey, keyName, 0, 0);
+    if (SUCCEEDED(status)) {
+        TITAN_LOG(L"Deleting key from user store");
+        status = NCryptDeleteKey(hKey, 0);
+        hKey = 0;
+        if (FAILED(status)) {
+            TITAN_LOG_HR(L"Failed to delete user key", status);
+        } else {
+            TITAN_LOG(L"User key deleted successfully");
+        }
+    }
+
+    if (hProvider) {
+        NCryptFreeObject(hProvider);
     }
 
     return S_OK;

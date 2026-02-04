@@ -44,8 +44,11 @@ public:
     // Decrypt to a password string
     HRESULT DecryptPassword(const std::vector<BYTE>& encryptedBlob, SecureString& password);
 
-    // Delete the persistent key
+    // Delete the persistent key (currently open)
     HRESULT DeleteKey();
+
+    // Delete a key by name (static - doesn't require open key)
+    static HRESULT DeleteKeyByName(PCWSTR keyName);
 
     // Close handles
     void Close();

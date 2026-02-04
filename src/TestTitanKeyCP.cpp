@@ -89,6 +89,7 @@ struct Options {
     bool setupCredential = false;
     bool listCredentials = false;
     bool testLockScreen = false;  // Test with NULL HWND (simulates lock screen)
+    bool resetAll = false;        // Delete all credentials and TPM keys
     std::wstring username;
     std::wstring password;
     std::wstring domain = L".";
@@ -118,6 +119,7 @@ void PrintHelp() {
     std::wcout << L"  --test-lockscreen   Test with NULL HWND (simulates lock screen)\n";
     std::wcout << L"  --setup             Enroll Titan Key and encrypt password\n";
     std::wcout << L"  --list              List stored credentials\n";
+    std::wcout << L"  --reset             Delete ALL credentials and TPM keys (start fresh)\n";
     std::wcout << L"  --user <username>   Username for setup\n";
     std::wcout << L"  --password <pass>   Password for setup\n";
     std::wcout << L"  --domain <domain>   Domain (default: . for local)\n";
@@ -160,6 +162,8 @@ Options ParseCommandLine(int argc, wchar_t* argv[]) {
             opts.listCredentials = true;
         } else if (arg == L"--test-lockscreen") {
             opts.testLockScreen = true;
+        } else if (arg == L"--reset") {
+            opts.resetAll = true;
         } else if (arg == L"--user" && i + 1 < argc) {
             opts.username = argv[++i];
         } else if (arg == L"--password" && i + 1 < argc) {
@@ -1050,6 +1054,62 @@ bool SetupCredential(const std::wstring& username, const std::wstring& password,
 }
 
 //
+// Reset All - Delete all credentials and TPM keys
+//
+bool ResetAll() {
+    std::wcout << L"\n--- Resetting All Credentials ---\n\n";
+    std::wcout << L"This will delete:\n";
+    std::wcout << L"  - All stored credentials in registry\n";
+    std::wcout << L"  - All TPM keys created by this tool\n\n";
+    
+    bool success = true;
+    
+    // Get all stored user SIDs first
+    CredentialStorage storage;
+    std::vector<std::wstring> userSids;
+    storage.EnumerateUsers(userSids);
+    
+    // Delete TPM keys for each user
+    for (const auto& sid : userSids) {
+        std::wstring keyName = L"TitanKeyCP_";
+        keyName += sid;
+        
+        std::wcout << L"[*] Deleting TPM key for SID: " << sid << L"\n";
+        HRESULT hr = TpmCrypto::DeleteKeyByName(keyName.c_str());
+        if (SUCCEEDED(hr)) {
+            std::wcout << L"    [OK] TPM key deleted\n";
+        } else {
+            std::wcout << L"    [WARN] Could not delete TPM key (may not exist)\n";
+        }
+    }
+    
+    // Also try to delete the test key
+    std::wcout << L"[*] Deleting test TPM key...\n";
+    TpmCrypto::DeleteKeyByName(L"TitanKeyCP_TEST");
+    
+    // Delete registry credentials
+    std::wcout << L"[*] Deleting registry credentials...\n";
+    LONG result = RegDeleteTreeW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\TitanKeyCP\\Credentials");
+    if (result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND) {
+        std::wcout << L"    [OK] Registry credentials deleted\n";
+    } else {
+        std::wcout << L"    [WARN] Could not delete registry: " << result << L"\n";
+        std::wcout << L"         Run as Administrator if needed.\n";
+        success = false;
+    }
+    
+    std::wcout << L"\n";
+    if (success) {
+        std::wcout << L"Reset complete! You can now run --setup to create fresh credentials.\n";
+    } else {
+        std::wcout << L"Reset partially complete. Try running as Administrator.\n";
+    }
+    std::wcout << L"\n";
+    
+    return success;
+}
+
+//
 // List Stored Credentials
 //
 void ListCredentials() {
@@ -1108,6 +1168,12 @@ int wmain(int argc, wchar_t* argv[]) {
     }
     
     bool allPassed = true;
+    
+    if (opts.resetAll) {
+        if (!ResetAll()) {
+            allPassed = false;
+        }
+    }
     
     if (opts.listCredentials) {
         ListCredentials();
