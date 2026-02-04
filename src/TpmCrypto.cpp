@@ -256,8 +256,20 @@ HRESULT TpmCrypto::Decrypt(
 {
     TITAN_LOG(L"TpmCrypto::Decrypt");
 
-    if (!m_hKey || encryptedBlob.size() < 4) {
+    if (!m_hKey) {
+        TITAN_LOG(L"Decrypt: No key handle");
         return E_INVALIDARG;
+    }
+    
+    if (encryptedBlob.size() < 4) {
+        TITAN_LOG(L"Decrypt: Blob too small");
+        return E_INVALIDARG;
+    }
+
+    {
+        WCHAR buf[128];
+        swprintf_s(buf, L"Decrypt: Blob size = %zu bytes", encryptedBlob.size());
+        TitanLogToFile(buf);
     }
 
     plaintext.clear();
@@ -272,7 +284,14 @@ HRESULT TpmCrypto::Decrypt(
             ((DWORD)encryptedBlob[2] << 16) |
             ((DWORD)encryptedBlob[3] << 24);
 
+        {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: Wrapped key size = %u bytes", wrappedKeySize);
+            TitanLogToFile(buf);
+        }
+
         if (encryptedBlob.size() < 4 + wrappedKeySize + AES_NONCE_SIZE + AES_TAG_SIZE) {
+            TITAN_LOG(L"Decrypt: Blob too small for wrapped key + AES data");
             hr = E_INVALIDARG;
             break;
         }
@@ -286,7 +305,7 @@ HRESULT TpmCrypto::Decrypt(
         oaepInfo.pbLabel = nullptr;
         oaepInfo.cbLabel = 0;
 
-        // Unwrap AES key using TPM
+        // Unwrap AES key using TPM - get size first
         DWORD aesKeySize = 0;
         SECURITY_STATUS secStatus = NCryptDecrypt(
             m_hKey,
@@ -298,11 +317,23 @@ HRESULT TpmCrypto::Decrypt(
             &aesKeySize,
             NCRYPT_PAD_OAEP_FLAG);
 
-        if (FAILED(secStatus) || aesKeySize != AES_KEY_SIZE) {
+        if (FAILED(secStatus)) {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: NCryptDecrypt (get size) failed: 0x%08X", secStatus);
+            TitanLogToFile(buf);
             hr = HRESULT_FROM_WIN32(secStatus);
             break;
         }
 
+        if (aesKeySize != AES_KEY_SIZE) {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: AES key size mismatch: expected %d, got %u", AES_KEY_SIZE, aesKeySize);
+            TitanLogToFile(buf);
+            hr = E_FAIL;
+            break;
+        }
+
+        // Actually decrypt
         secStatus = NCryptDecrypt(
             m_hKey,
             const_cast<BYTE*>(wrappedKey),
@@ -314,21 +345,46 @@ HRESULT TpmCrypto::Decrypt(
             NCRYPT_PAD_OAEP_FLAG);
 
         if (FAILED(secStatus)) {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: NCryptDecrypt (decrypt) failed: 0x%08X", secStatus);
+            TitanLogToFile(buf);
             hr = HRESULT_FROM_WIN32(secStatus);
             break;
         }
+
+        TITAN_LOG(L"Decrypt: AES key unwrapped successfully");
 
         // Extract AES-encrypted data
         const BYTE* aesEncrypted = encryptedBlob.data() + 4 + wrappedKeySize;
         DWORD aesEncryptedSize = (DWORD)encryptedBlob.size() - 4 - wrappedKeySize;
 
+        {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: AES encrypted size = %u bytes", aesEncryptedSize);
+            TitanLogToFile(buf);
+        }
+
         // Decrypt with AES-GCM
         hr = AesGcmDecrypt(aesKey, AES_KEY_SIZE, aesEncrypted, aesEncryptedSize, plaintext);
+        
+        if (FAILED(hr)) {
+            WCHAR buf[128];
+            swprintf_s(buf, L"Decrypt: AesGcmDecrypt failed: 0x%08X", hr);
+            TitanLogToFile(buf);
+        } else {
+            TITAN_LOG(L"Decrypt: AES-GCM decryption successful");
+        }
 
     } while (false);
 
     // Securely clear AES key
     SecureZeroMemory(aesKey, sizeof(aesKey));
+
+    if (FAILED(hr)) {
+        WCHAR buf[128];
+        swprintf_s(buf, L"Decrypt failed with HR=0x%08X", hr);
+        TitanLogToFile(buf);
+    }
 
     return hr;
 }
