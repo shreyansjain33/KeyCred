@@ -166,10 +166,10 @@ inline void TitanLogToFile(const WCHAR* msg) {
 }
 
 // Debug logging - always enabled to debug lock screen
-#define TITAN_LOG(msg) TitanLogToFile(L##msg)
+#define TITAN_LOG(msg) TitanLogToFile(msg)
 #define TITAN_LOG_HR(msg, hr) { \
     WCHAR _buf[512]; \
-    swprintf_s(_buf, L##msg L" HR=0x%08X", hr); \
+    swprintf_s(_buf, msg L" HR=0x%08X", hr); \
     TitanLogToFile(_buf); \
 }
 
