@@ -166,6 +166,7 @@ inline void TitanLogToFile(const WCHAR* msg) {
 }
 
 // Debug logging - always enabled to debug lock screen
+// Note: Pass wide string literals directly, e.g., TITAN_LOG(L"message")
 #define TITAN_LOG(msg) TitanLogToFile(msg)
 #define TITAN_LOG_HR(msg, hr) { \
     WCHAR _buf[512]; \

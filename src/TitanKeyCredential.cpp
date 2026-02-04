@@ -19,6 +19,7 @@ TitanKeyCredential::TitanKeyCredential()
     , m_events(nullptr)
     , m_cpus(CPUS_INVALID)
     , m_authenticated(FALSE)
+    , m_operationInProgress(FALSE)
 {
     DllAddRef();
     TITAN_LOG(L"TitanKeyCredential created");
@@ -94,7 +95,7 @@ HRESULT TitanKeyCredential::Initialize(
         }
     }
 
-    m_statusText = L"Select to sign in with Titan Key";
+    m_statusText = L"Click Submit to sign in with Titan Key";
 
     // Initialize WebAuthn
     HRESULT hr = m_webAuthn.Initialize();
@@ -179,9 +180,9 @@ IFACEMETHODIMP TitanKeyCredential::SetSelected(BOOL* pbAutoLogon) {
     TITAN_LOG(L"TitanKeyCredential::SetSelected");
 
     if (pbAutoLogon) {
-        // Auto-trigger authentication when tile is selected
-        // This causes Windows to call Connect() immediately
-        *pbAutoLogon = TRUE;
+        // Do NOT auto-trigger - let user click Submit button
+        // Auto-trigger blocks UI and prevents switching to other credentials
+        *pbAutoLogon = FALSE;
     }
 
     return S_OK;
@@ -189,6 +190,13 @@ IFACEMETHODIMP TitanKeyCredential::SetSelected(BOOL* pbAutoLogon) {
 
 IFACEMETHODIMP TitanKeyCredential::SetDeselected() {
     TITAN_LOG(L"TitanKeyCredential::SetDeselected");
+
+    // Cancel any ongoing WebAuthn operation when user switches tiles
+    if (m_operationInProgress) {
+        TITAN_LOG(L"SetDeselected - cancelling WebAuthn operation");
+        m_webAuthn.CancelOperation();
+        m_operationInProgress = FALSE;
+    }
 
     // Clear any sensitive state
     m_authenticated = FALSE;
@@ -227,7 +235,7 @@ IFACEMETHODIMP TitanKeyCredential::GetFieldState(
         *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
         break;
     case TKFI_SUBMIT_BUTTON:
-        *pcpfs = CPFS_HIDDEN;  // Hidden - auto-trigger on tile selection
+        *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;  // Visible - user must click to trigger
         break;
     default:
         *pcpfs = CPFS_HIDDEN;
@@ -549,7 +557,11 @@ IFACEMETHODIMP TitanKeyCredential::Disconnect() {
     TITAN_LOG(L"TitanKeyCredential::Disconnect");
 
     // Cancel any ongoing WebAuthn operation
-    m_webAuthn.CancelOperation();
+    if (m_operationInProgress) {
+        TITAN_LOG(L"Cancelling WebAuthn operation");
+        m_webAuthn.CancelOperation();
+        m_operationInProgress = FALSE;
+    }
 
     // Clear sensitive state
     m_authenticated = FALSE;
@@ -685,6 +697,9 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
     
     TITAN_LOG(L"Calling WebAuthn GetAssertion");
     
+    // Mark operation in progress (allows Disconnect to cancel)
+    m_operationInProgress = TRUE;
+    
     WebAuthnHelper::AssertionResult assertion;
     hr = m_webAuthn.GetAssertion(
         hWnd,
@@ -692,6 +707,9 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
         challenge,
         &storedCred.credentialId,
         assertion);
+
+    // Operation complete
+    m_operationInProgress = FALSE;
 
     // Cleanup: destroy window if we created it
     if (createdWindow && hWnd) {
@@ -776,17 +794,29 @@ HRESULT TitanKeyCredential::CreateKerbInteractiveLogon(
 {
     TITAN_LOG(L"Creating KERB_INTERACTIVE_UNLOCK_LOGON");
 
-    if (!domain || !username || !password || !pcpcs) {
+    if (!username || !password || !pcpcs) {
         return E_INVALIDARG;
+    }
+
+    // Handle domain - for local accounts use empty string or computer name
+    std::wstring effectiveDomain;
+    if (!domain || wcscmp(domain, L".") == 0 || wcslen(domain) == 0) {
+        // For local accounts, use empty domain (LSA will use local machine)
+        effectiveDomain = L"";
+        TITAN_LOG(L"Using empty domain for local account");
+    } else {
+        effectiveDomain = domain;
     }
 
     // Get the Negotiate authentication package
     HANDLE hLsa = nullptr;
     NTSTATUS status = LsaConnectUntrusted(&hLsa);
     if (!NT_SUCCESS(status)) {
+        TITAN_LOG_HR(L"LsaConnectUntrusted failed", status);
         return HRESULT_FROM_NT(status);
     }
 
+    // Use Negotiate for flexibility (handles both Kerberos and NTLM)
     LSA_STRING packageName;
     packageName.Buffer = (PCHAR)"Negotiate";
     packageName.Length = (USHORT)strlen(packageName.Buffer);
@@ -797,11 +827,18 @@ HRESULT TitanKeyCredential::CreateKerbInteractiveLogon(
     LsaDeregisterLogonProcess(hLsa);
 
     if (!NT_SUCCESS(status)) {
+        TITAN_LOG_HR(L"LsaLookupAuthenticationPackage failed", status);
         return HRESULT_FROM_NT(status);
     }
 
-    // Calculate sizes
-    DWORD domainLen = (DWORD)wcslen(domain);
+    {
+        WCHAR buf[64];
+        swprintf_s(buf, L"Auth package ID: %u", authPackage);
+        TitanLogToFile(buf);
+    }
+
+    // Calculate sizes (use effective domain)
+    DWORD domainLen = (DWORD)effectiveDomain.length();
     DWORD usernameLen = (DWORD)wcslen(username);
     DWORD passwordLen = (DWORD)wcslen(password);
 
@@ -809,13 +846,21 @@ HRESULT TitanKeyCredential::CreateKerbInteractiveLogon(
     DWORD usernameBytes = usernameLen * sizeof(WCHAR);
     DWORD passwordBytes = passwordLen * sizeof(WCHAR);
 
-    // Calculate total buffer size
-    DWORD totalSize = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) +
-        domainBytes + usernameBytes + passwordBytes;
+    // Calculate total buffer size with proper alignment
+    DWORD structSize = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON);
+    DWORD totalSize = structSize + domainBytes + usernameBytes + passwordBytes;
+
+    {
+        WCHAR buf[128];
+        swprintf_s(buf, L"Buffer sizes - struct:%u domain:%u user:%u pass:%u total:%u",
+            structSize, domainBytes, usernameBytes, passwordBytes, totalSize);
+        TitanLogToFile(buf);
+    }
 
     // Allocate buffer
     BYTE* buffer = (BYTE*)CoTaskMemAlloc(totalSize);
     if (!buffer) {
+        TITAN_LOG(L"CoTaskMemAlloc failed");
         return E_OUTOFMEMORY;
     }
     ZeroMemory(buffer, totalSize);
@@ -825,34 +870,36 @@ HRESULT TitanKeyCredential::CreateKerbInteractiveLogon(
 
     // Set message type
     kil->MessageType = KerbInteractiveLogon;
+    
+    // Initialize LogonId to zero (new logon session)
+    kiul->LogonId.LowPart = 0;
+    kiul->LogonId.HighPart = 0;
 
-    // Set up string pointers (relative to the structure)
-    BYTE* stringBuffer = buffer + sizeof(KERB_INTERACTIVE_UNLOCK_LOGON);
+    // Calculate string offsets from the START of the buffer
+    DWORD domainOffset = structSize;
+    DWORD usernameOffset = domainOffset + domainBytes;
+    DWORD passwordOffset = usernameOffset + usernameBytes;
 
-    // Domain
+    // Copy strings to buffer
+    if (domainBytes > 0) {
+        memcpy(buffer + domainOffset, effectiveDomain.c_str(), domainBytes);
+    }
+    memcpy(buffer + usernameOffset, username, usernameBytes);
+    memcpy(buffer + passwordOffset, password, passwordBytes);
+
+    // Set UNICODE_STRING fields with OFFSETS (not pointers)
+    // The Buffer field should contain the offset from the start of the buffer
     kil->LogonDomainName.Length = (USHORT)domainBytes;
     kil->LogonDomainName.MaximumLength = (USHORT)domainBytes;
-    kil->LogonDomainName.Buffer = (PWSTR)stringBuffer;
-    memcpy(stringBuffer, domain, domainBytes);
-    stringBuffer += domainBytes;
+    kil->LogonDomainName.Buffer = (PWSTR)(ULONG_PTR)domainOffset;
 
-    // Username
     kil->UserName.Length = (USHORT)usernameBytes;
     kil->UserName.MaximumLength = (USHORT)usernameBytes;
-    kil->UserName.Buffer = (PWSTR)stringBuffer;
-    memcpy(stringBuffer, username, usernameBytes);
-    stringBuffer += usernameBytes;
+    kil->UserName.Buffer = (PWSTR)(ULONG_PTR)usernameOffset;
 
-    // Password
     kil->Password.Length = (USHORT)passwordBytes;
     kil->Password.MaximumLength = (USHORT)passwordBytes;
-    kil->Password.Buffer = (PWSTR)stringBuffer;
-    memcpy(stringBuffer, password, passwordBytes);
-
-    // Convert absolute pointers to relative offsets for serialization
-    kil->LogonDomainName.Buffer = (PWSTR)((BYTE*)kil->LogonDomainName.Buffer - buffer);
-    kil->UserName.Buffer = (PWSTR)((BYTE*)kil->UserName.Buffer - buffer);
-    kil->Password.Buffer = (PWSTR)((BYTE*)kil->Password.Buffer - buffer);
+    kil->Password.Buffer = (PWSTR)(ULONG_PTR)passwordOffset;
 
     // Fill in the serialization structure
     pcpcs->ulAuthenticationPackage = authPackage;

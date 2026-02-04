@@ -143,13 +143,13 @@ HRESULT WebAuthnHelper::MakeCredential(
     // Setup authenticator selection - prefer cross-platform (USB) authenticators
     WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS options = { 0 };
     options.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION;
-    options.dwTimeoutMilliseconds = 60000;  // 60 seconds
+    options.dwTimeoutMilliseconds = 30000;  // 30 seconds - reduced timeout
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM;
     options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_DISCOURAGED;
     options.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
     options.bRequireResidentKey = FALSE;
 
-    // Generate cancellation ID
+    // Generate cancellation ID (allows CancelOperation() to work)
     CoCreateGuid(&m_cancellationId);
     options.pCancellationId = &m_cancellationId;
 
@@ -251,10 +251,14 @@ HRESULT WebAuthnHelper::GetAssertion(
         TITAN_LOG(L"No credential filter - authenticator will discover");
     }
 
+    // Generate cancellation ID for this operation (allows CancelOperation() to work)
+    CoCreateGuid(&m_cancellationId);
+
     // Setup options - minimal configuration for maximum compatibility
     WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS options = { 0 };
     options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION;
-    options.dwTimeoutMilliseconds = 60000;  // 60 seconds
+    options.dwTimeoutMilliseconds = 30000;  // 30 seconds - reduced to prevent long blocks
+    options.pCancellationId = &m_cancellationId;  // Enable cancellation
     
     // Only set credential list if we have a filter, otherwise let authenticator discover
     if (useCredentialFilter) {
@@ -285,6 +289,9 @@ HRESULT WebAuthnHelper::GetAssertion(
             break;
         case NTE_INVALID_PARAMETER:
             m_lastError = L"Invalid parameter";
+            break;
+        case 0x80080005:  // CO_E_SERVER_EXEC_FAILURE
+            m_lastError = L"Security UI failed to launch - try clicking Submit";
             break;
         default:
             m_lastError = L"Authentication failed";

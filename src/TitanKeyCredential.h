@@ -111,6 +111,7 @@ private:
     // Authentication state
     BOOL m_authenticated;
     SecureString m_password;
+    volatile BOOL m_operationInProgress;  // Track if WebAuthn operation is ongoing
 
     // Helpers
     CredentialStorage m_credentialStorage;
