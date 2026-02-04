@@ -59,6 +59,10 @@ HRESULT TpmCrypto::Initialize() {
 //
 // OpenOrCreateKey - Create or open a persistent RSA key
 //
+// IMPORTANT: Uses NCRYPT_MACHINE_KEY_FLAG to store key in machine-wide store.
+// This is required because credential providers run as SYSTEM on the lock screen
+// and cannot access user-specific key stores.
+//
 HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
     TITAN_LOG(L"TpmCrypto::OpenOrCreateKey");
 
@@ -72,21 +76,21 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
 
     m_keyName = keyName;
 
-    // Try to open existing key first
+    // Try to open existing key first (from machine key store)
     SECURITY_STATUS status = NCryptOpenKey(
         m_hProvider,
         &m_hKey,
         keyName,
         0,
-        0);
+        NCRYPT_MACHINE_KEY_FLAG);  // Use machine key store
 
     if (SUCCEEDED(status)) {
-        TITAN_LOG(L"Opened existing TPM key");
+        TITAN_LOG(L"Opened existing TPM key from machine store");
         return S_OK;
     }
 
-    // Key doesn't exist, create new one
-    TITAN_LOG(L"Creating new TPM key");
+    // Key doesn't exist, create new one in machine key store
+    TITAN_LOG(L"Creating new TPM key in machine store");
 
     status = NCryptCreatePersistedKey(
         m_hProvider,
@@ -94,7 +98,7 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
         NCRYPT_RSA_ALGORITHM,
         keyName,
         0,
-        0);
+        NCRYPT_MACHINE_KEY_FLAG);  // Use machine key store
 
     if (FAILED(status)) {
         TITAN_LOG_HR(L"NCryptCreatePersistedKey failed", status);
@@ -143,7 +147,7 @@ HRESULT TpmCrypto::OpenOrCreateKey(PCWSTR keyName) {
         return HRESULT_FROM_WIN32(status);
     }
 
-    TITAN_LOG(L"TPM key created successfully");
+    TITAN_LOG(L"TPM key created successfully in machine store");
     return S_OK;
 }
 
