@@ -1,0 +1,18 @@
+[2026-02-03 18:30:41] === Titan Key CP Test Log Started ===
+[2026-02-03 18:30:41] Test application started
+[2026-02-03 18:30:41] === TestLockScreen started ===
+[2026-02-03 18:30:41] User: shrey
+[2026-02-03 18:30:41] SID: S-1-5-21-1511476628-715758266-3079938757-1001
+[2026-02-03 18:30:41] RP ID: windows.local
+[2026-02-03 18:30:41] Credential ID size: 64
+[2026-02-03 18:30:41] TEST 1: Using GetConsoleWindow()
+[2026-02-03 18:30:41] Console HWND: 0x00000000000B0BC0
+[2026-02-03 18:30:46] GetAssertion (console HWND) returned HR=0x00000000
+[2026-02-03 18:30:46] TEST 2: Using NULL HWND
+[2026-02-03 18:30:46] GetAssertion (NULL HWND) returned HR=0x80090027
+[2026-02-03 18:30:46] Invalid parameter
+[2026-02-03 18:30:46] TEST 3: Using hidden window workaround
+[2026-02-03 18:30:46] Hidden window HWND: 0x0000000000890B32
+[2026-02-03 18:30:49] GetAssertion (hidden window) returned HR=0x00000000
+[2026-02-03 18:30:49] SUCCESS: Hidden window workaround works!
+[2026-02-03 18:30:49] === Log Ended ===

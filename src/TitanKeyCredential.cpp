@@ -270,21 +270,54 @@ IFACEMETHODIMP TitanKeyCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbm
     *phbmp = nullptr;
 
     if (dwFieldID == TKFI_TILEIMAGE) {
-        // Load the tile image from resources
-        extern HINSTANCE g_hInstance;
-        *phbmp = (HBITMAP)LoadImageW(
-            g_hInstance,
-            MAKEINTRESOURCEW(TITAN_KEY_CP_TILE_IMAGE),
-            IMAGE_BITMAP,
-            0, 0,
-            LR_DEFAULTCOLOR);
-
-        if (*phbmp == nullptr) {
-            // If no resource, create a simple placeholder
-            HDC hdc = GetDC(nullptr);
-            *phbmp = CreateCompatibleBitmap(hdc, 48, 48);
-            ReleaseDC(nullptr, hdc);
+        // Create a security key icon programmatically
+        const int SIZE = 48;
+        
+        HDC hdcScreen = GetDC(nullptr);
+        HDC hdcMem = CreateCompatibleDC(hdcScreen);
+        *phbmp = CreateCompatibleBitmap(hdcScreen, SIZE, SIZE);
+        
+        if (*phbmp) {
+            HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, *phbmp);
+            
+            // Background - dark blue gradient
+            HBRUSH hBrushBg = CreateSolidBrush(RGB(30, 60, 114));
+            RECT rcBg = {0, 0, SIZE, SIZE};
+            FillRect(hdcMem, &rcBg, hBrushBg);
+            DeleteObject(hBrushBg);
+            
+            // Draw USB key body (rounded rectangle)
+            HBRUSH hBrushKey = CreateSolidBrush(RGB(70, 130, 180));  // Steel blue
+            HPEN hPenOutline = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+            HBRUSH hOldBrush = (HBRUSH)SelectObject(hdcMem, hBrushKey);
+            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenOutline);
+            
+            // Key body
+            RoundRect(hdcMem, 8, 14, 40, 34, 4, 4);
+            
+            // USB connector
+            HBRUSH hBrushUSB = CreateSolidBrush(RGB(192, 192, 192));  // Silver
+            SelectObject(hdcMem, hBrushUSB);
+            Rectangle(hdcMem, 36, 18, 44, 30);
+            DeleteObject(hBrushUSB);
+            
+            // Key hole / button (circle)
+            HBRUSH hBrushHole = CreateSolidBrush(RGB(255, 215, 0));  // Gold - indicates touch
+            SelectObject(hdcMem, hBrushHole);
+            Ellipse(hdcMem, 14, 18, 26, 30);
+            DeleteObject(hBrushHole);
+            
+            // Cleanup
+            SelectObject(hdcMem, hOldBrush);
+            SelectObject(hdcMem, hOldPen);
+            DeleteObject(hBrushKey);
+            DeleteObject(hPenOutline);
+            
+            SelectObject(hdcMem, hOldBmp);
         }
+        
+        DeleteDC(hdcMem);
+        ReleaseDC(nullptr, hdcScreen);
 
         return S_OK;
     }
@@ -581,46 +614,75 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
     }
 
     // Get assertion from Titan Key (user touches the key)
-    // WebAuthn requires a valid HWND - create a hidden window if needed
-    HWND hWnd = GetForegroundWindow();
+    // WebAuthn requires a valid HWND - try multiple approaches
+    HWND hWnd = NULL;
     BOOL createdWindow = FALSE;
     
+    // Try 1: Get foreground window
+    hWnd = GetForegroundWindow();
+    if (hWnd) {
+        TITAN_LOG(L"Using foreground window");
+    }
+    
+    // Try 2: Create a popup window (works better on secure desktop)
     if (!hWnd) {
-        // Create a hidden window for WebAuthn
-        TITAN_LOG(L"Creating hidden window for WebAuthn");
+        TITAN_LOG(L"No foreground window, creating popup window");
         
         static bool windowClassRegistered = false;
         static const WCHAR* WINDOW_CLASS = L"TitanKeyCPWebAuthnWindow";
         
         if (!windowClassRegistered) {
-            WNDCLASSW wc = {0};
+            WNDCLASSEXW wc = {0};
+            wc.cbSize = sizeof(WNDCLASSEXW);
             wc.lpfnWndProc = DefWindowProcW;
             wc.hInstance = GetModuleHandle(NULL);
             wc.lpszClassName = WINDOW_CLASS;
-            RegisterClassW(&wc);
-            windowClassRegistered = true;
+            wc.style = CS_HREDRAW | CS_VREDRAW;
+            if (RegisterClassExW(&wc)) {
+                windowClassRegistered = true;
+                TITAN_LOG(L"Window class registered");
+            } else {
+                TITAN_LOG(L"Failed to register window class");
+            }
         }
         
+        // Create a popup window - these work on secure desktop
         hWnd = CreateWindowExW(
-            0,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             WINDOW_CLASS,
-            L"TitanKeyCP WebAuthn",
-            WS_OVERLAPPED,
-            CW_USEDEFAULT, CW_USEDEFAULT, 1, 1,
+            L"Security Key",
+            WS_POPUP,
+            0, 0, 1, 1,
             NULL,
             NULL,
             GetModuleHandle(NULL),
             NULL);
         
         if (hWnd) {
-            TITAN_LOG(L"Hidden window created successfully");
+            TITAN_LOG(L"Popup window created");
             createdWindow = TRUE;
+            // Make sure it's valid
+            ShowWindow(hWnd, SW_HIDE);
         } else {
-            TITAN_LOG(L"Failed to create hidden window, using desktop");
-            hWnd = GetDesktopWindow();
+            DWORD err = GetLastError();
+            WCHAR buf[128];
+            swprintf_s(buf, L"CreateWindowExW failed, error: %u", err);
+            TitanLogToFile(buf);
         }
     }
+    
+    // Try 3: Use desktop window as last resort
+    if (!hWnd) {
+        TITAN_LOG(L"Using desktop window");
+        hWnd = GetDesktopWindow();
+    }
 
+    {
+        WCHAR buf[128];
+        swprintf_s(buf, L"Using HWND: 0x%p", (void*)hWnd);
+        TitanLogToFile(buf);
+    }
+    
     TITAN_LOG(L"Calling WebAuthn GetAssertion");
     
     WebAuthnHelper::AssertionResult assertion;

@@ -14,6 +14,7 @@
 #include <wincrypt.h>
 #include <bcrypt.h>
 #include <sddl.h>
+#include <stdio.h>
 
 // WebAuthn API version compatibility
 // These may not be defined in older Windows SDKs
@@ -135,13 +136,41 @@ enum TITAN_KEY_FIELD_ID {
     TKFI_NUM_FIELDS = 5
 };
 
-// Debug logging (disabled in release)
-#ifdef _DEBUG
-#define TITAN_LOG(msg) OutputDebugStringW(L"[TitanKeyCP] " msg L"\n")
+// File logging for debugging at lock screen
+inline void TitanLogToFile(const WCHAR* msg) {
+    // Write to file
+    HANDLE hFile = CreateFileW(
+        L"B:\\Libraries\\Downloads\\TitanKeyCP_debug.log",
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        // Convert to ANSI for simpler file output
+        char buf[1024];
+        char msgAnsi[512];
+        WideCharToMultiByte(CP_ACP, 0, msg, -1, msgAnsi, sizeof(msgAnsi), NULL, NULL);
+        sprintf_s(buf, "[%02d:%02d:%02d] %s\r\n", 
+            st.wHour, st.wMinute, st.wSecond, msgAnsi);
+        DWORD written;
+        WriteFile(hFile, buf, (DWORD)strlen(buf), &written, NULL);
+        CloseHandle(hFile);
+    }
+    OutputDebugStringW(L"[TitanKeyCP] ");
+    OutputDebugStringW(msg);
+    OutputDebugStringW(L"\n");
+}
+
+// Debug logging - always enabled to debug lock screen
+#define TITAN_LOG(msg) TitanLogToFile(L##msg)
 #define TITAN_LOG_HR(msg, hr) { \
     WCHAR _buf[512]; \
-    swprintf_s(_buf, L"[TitanKeyCP] " msg L" HR=0x%08X\n", hr); \
-    OutputDebugStringW(_buf); \
+    swprintf_s(_buf, L##msg L" HR=0x%08X", hr); \
+    TitanLogToFile(_buf); \
 }
 #else
 #define TITAN_LOG(msg)
