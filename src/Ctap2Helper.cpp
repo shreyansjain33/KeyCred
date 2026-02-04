@@ -17,6 +17,7 @@ Ctap2Helper::Ctap2Helper()
     , m_channelId(CTAPHID_BROADCAST_CID)
     , m_cancelled(FALSE)
     , m_readEvent(NULL)
+    , m_supportsCtap2(FALSE)
 {
     TITAN_LOG(L"Ctap2Helper created");
 }
@@ -1333,4 +1334,189 @@ HRESULT Ctap2Helper::ComputeSHA256(const std::vector<BYTE>& data, std::vector<BY
     }
 
     return S_OK;
+}
+
+//
+// U2fAuthenticate - U2F/CTAP1 authentication (fallback for older devices)
+//
+// U2F Message format (APDU):
+// - Challenge parameter (32 bytes) - clientDataHash
+// - Application parameter (32 bytes) - SHA-256 of appId/rpId  
+// - Key handle length (1 byte)
+// - Key handle (variable) - credential ID
+//
+HRESULT Ctap2Helper::U2fAuthenticate(
+    const std::vector<BYTE>& appIdHash,
+    const std::vector<BYTE>& clientDataHash,
+    const std::vector<BYTE>& keyHandle,
+    DWORD timeoutMs,
+    AssertionResult& result)
+{
+    TITAN_LOG(L"Ctap2Helper::U2fAuthenticate");
+
+    if (!IsAvailable()) {
+        m_lastError = L"Device not available";
+        return E_FAIL;
+    }
+
+    if (appIdHash.size() != 32 || clientDataHash.size() != 32) {
+        m_lastError = L"Invalid hash size (must be 32 bytes)";
+        return E_INVALIDARG;
+    }
+
+    if (keyHandle.empty() || keyHandle.size() > 255) {
+        m_lastError = L"Invalid key handle size";
+        return E_INVALIDARG;
+    }
+
+    m_cancelled = FALSE;
+
+    // Build U2F authenticate request (ISO 7816-4 APDU format)
+    // Extended length APDU for U2F HID
+    std::vector<BYTE> request;
+    
+    // APDU header
+    request.push_back(0x00);                    // CLA
+    request.push_back(U2F_AUTHENTICATE);        // INS
+    request.push_back(U2F_AUTH_ENFORCE);        // P1 - require user presence
+    request.push_back(0x00);                    // P2
+    
+    // Extended length encoding (3 bytes for Lc)
+    size_t dataLen = 32 + 32 + 1 + keyHandle.size();  // challenge + appId + handleLen + handle
+    request.push_back(0x00);                    // Extended length marker
+    request.push_back((BYTE)(dataLen >> 8));    // Lc high byte
+    request.push_back((BYTE)(dataLen & 0xFF));  // Lc low byte
+    
+    // Challenge parameter (clientDataHash)
+    request.insert(request.end(), clientDataHash.begin(), clientDataHash.end());
+    
+    // Application parameter (appIdHash)
+    request.insert(request.end(), appIdHash.begin(), appIdHash.end());
+    
+    // Key handle
+    request.push_back((BYTE)keyHandle.size());
+    request.insert(request.end(), keyHandle.begin(), keyHandle.end());
+    
+    // Le (max response length) - extended format
+    request.push_back(0x00);
+    request.push_back(0x00);
+
+    TITAN_LOG(L"Sending U2F Authenticate request...");
+
+    // Send via CTAPHID_MSG (U2F message channel)
+    HRESULT hr = CtapHidSend(CTAPHID_MSG, request);
+    if (FAILED(hr)) {
+        TITAN_LOG_HR(L"Failed to send U2F request", hr);
+        return hr;
+    }
+
+    TITAN_LOG(L"Waiting for U2F response (touch your key)...");
+
+    // Poll for response - U2F requires touching the key
+    DWORD startTime = GetTickCount();
+    while (TRUE) {
+        // Check timeout
+        if (GetTickCount() - startTime > timeoutMs) {
+            m_lastError = L"Timeout waiting for key touch";
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        }
+
+        // Check cancellation
+        if (m_cancelled) {
+            m_lastError = L"Operation cancelled";
+            return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        }
+
+        // Receive response
+        BYTE respCmd;
+        std::vector<BYTE> response;
+        hr = CtapHidRecv(respCmd, response, 500);  // Short timeout for polling
+        
+        if (hr == HRESULT_FROM_WIN32(ERROR_TIMEOUT)) {
+            // No response yet, retry with same request (U2F requires re-sending)
+            hr = CtapHidSend(CTAPHID_MSG, request);
+            if (FAILED(hr)) {
+                return hr;
+            }
+            continue;
+        }
+        
+        if (FAILED(hr)) {
+            return hr;
+        }
+
+        if (respCmd != CTAPHID_MSG || response.size() < 2) {
+            m_lastError = L"Invalid U2F response";
+            return E_FAIL;
+        }
+
+        // Check status word (last 2 bytes)
+        WORD sw = (response[response.size() - 2] << 8) | response[response.size() - 1];
+        
+        if (sw == U2F_SW_CONDITIONS_NOT_SATISFIED) {
+            // User presence required - keep polling
+            TITAN_LOG(L"Touch your security key!");
+            Sleep(200);
+            hr = CtapHidSend(CTAPHID_MSG, request);
+            if (FAILED(hr)) {
+                return hr;
+            }
+            continue;
+        }
+        
+        if (sw != U2F_SW_NO_ERROR) {
+            WCHAR buf[64];
+            swprintf_s(buf, L"U2F error: 0x%04X", sw);
+            m_lastError = buf;
+            
+            if (sw == U2F_SW_WRONG_DATA) {
+                m_lastError = L"Wrong key handle - credential not on this device";
+            }
+            return E_FAIL;
+        }
+
+        // Parse successful response
+        // Response format: user presence (1) + counter (4) + signature (variable)
+        if (response.size() < 7) {  // 1 + 4 + at least 2 for SW
+            m_lastError = L"U2F response too short";
+            return E_FAIL;
+        }
+
+        size_t dataLen = response.size() - 2;  // Exclude status word
+        
+        // User presence byte
+        BYTE userPresence = response[0];
+        if (!(userPresence & 0x01)) {
+            m_lastError = L"User presence not confirmed";
+            return E_FAIL;
+        }
+
+        // Counter (4 bytes, big-endian)
+        DWORD counter = (response[1] << 24) | (response[2] << 16) | (response[3] << 8) | response[4];
+
+        // Build authenticator data (U2F format -> WebAuthn format)
+        // AuthenticatorData = appIdHash (32) + flags (1) + counter (4)
+        result.authenticatorData.clear();
+        result.authenticatorData.insert(result.authenticatorData.end(), appIdHash.begin(), appIdHash.end());
+        result.authenticatorData.push_back(userPresence);  // flags
+        result.authenticatorData.push_back((BYTE)(counter >> 24));
+        result.authenticatorData.push_back((BYTE)(counter >> 16));
+        result.authenticatorData.push_back((BYTE)(counter >> 8));
+        result.authenticatorData.push_back((BYTE)(counter));
+
+        // Signature (DER encoded ECDSA)
+        result.signature.assign(response.begin() + 5, response.begin() + dataLen);
+
+        // Copy key handle as credential ID
+        result.credentialId = keyHandle;
+
+        {
+            WCHAR buf[128];
+            swprintf_s(buf, L"U2F auth success: counter=%u, sig=%zu bytes", counter, result.signature.size());
+            TitanLogToFile(buf);
+        }
+
+        TITAN_LOG(L"U2fAuthenticate completed successfully");
+        return S_OK;
+    }
 }

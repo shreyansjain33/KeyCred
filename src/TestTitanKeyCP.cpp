@@ -802,11 +802,62 @@ bool TestCtap2() {
         std::wcout << L"    This method will work on the Windows lock screen.\n";
         TEST_LOG(L"SUCCESS: CTAP2 works!");
         return true;
-    } else {
-        std::wcout << L"    [FAIL] " << ctap2.GetLastErrorDescription() << L"\n";
-        TEST_LOG(ctap2.GetLastErrorDescription());
-        return false;
     }
+    
+    // CTAP2 failed - try U2F fallback (for first-gen Titan Keys)
+    std::wstring errDesc = ctap2.GetLastErrorDescription();
+    std::wcout << L"    [INFO] CTAP2 failed: " << errDesc << L"\n";
+    
+    if (errDesc.find(L"CTAPHID error: 0x01") != std::wstring::npos ||
+        errDesc.find(L"Invalid") != std::wstring::npos) {
+        
+        std::wcout << L"\n[*] CTAP2 not supported, trying U2F fallback...\n";
+        std::wcout << L"    (First-gen Titan Keys only support U2F)\n";
+        std::wcout << L"    Touch your Titan Key when it blinks!\n\n";
+        TEST_LOG(L"Trying U2F fallback...");
+        
+        // Compute appIdHash (SHA-256 of RP ID)
+        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, cred.relyingPartyId.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string rpIdUtf8(utf8Len - 1, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, cred.relyingPartyId.c_str(), -1, &rpIdUtf8[0], utf8Len, nullptr, nullptr);
+        
+        std::vector<BYTE> rpIdBytes(rpIdUtf8.begin(), rpIdUtf8.end());
+        std::vector<BYTE> appIdHash;
+        Ctap2Helper::ComputeSHA256(rpIdBytes, appIdHash);
+        
+        // Re-initialize device (may have closed)
+        ctap2.Close();
+        hr = ctap2.Initialize();
+        if (FAILED(hr)) {
+            std::wcout << L"    [FAIL] Could not re-initialize device\n";
+            return false;
+        }
+        
+        hr = ctap2.U2fAuthenticate(
+            appIdHash,
+            clientDataHash,
+            cred.credentialId,
+            30000,
+            result);
+        
+        TEST_LOG_HR(L"U2F Authenticate returned", hr);
+        
+        if (SUCCEEDED(hr)) {
+            std::wcout << L"    [OK] U2F Authenticate succeeded!\n";
+            std::wcout << L"         Signature: " << result.signature.size() << L" bytes\n";
+            std::wcout << L"         Auth Data: " << result.authenticatorData.size() << L" bytes\n";
+            std::wcout << L"\n";
+            std::wcout << L"    SUCCESS: U2F/CTAP1 works!\n";
+            std::wcout << L"    Your Titan Key uses the older U2F protocol.\n";
+            TEST_LOG(L"SUCCESS: U2F works!");
+            return true;
+        } else {
+            std::wcout << L"    [FAIL] U2F also failed: " << ctap2.GetLastErrorDescription() << L"\n";
+            TEST_LOG(ctap2.GetLastErrorDescription());
+        }
+    }
+    
+    return false;
 }
 
 //
