@@ -172,10 +172,6 @@ inline void TitanLogToFile(const WCHAR* msg) {
     swprintf_s(_buf, L##msg L" HR=0x%08X", hr); \
     TitanLogToFile(_buf); \
 }
-#else
-#define TITAN_LOG(msg)
-#define TITAN_LOG_HR(msg, hr)
-#endif
 
 // Helper class for COM reference counting
 template<typename T>
