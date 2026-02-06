@@ -66,8 +66,11 @@ echo.
 echo STEP 1: Enter your Windows credentials
 echo ----------------------------------------
 echo.
-set /p USERNAME="Windows username: "
-set /p PASSWORD="Windows password: "
+echo * Username should match the user directory name present here: C:\Users\<username>
+echo * If logged-in using Microsoft account, then use the Microsoft Account's password.
+echo.
+set /p USERNAME="Windows Username: "
+set /p PASSWORD="Windows Password: "
 
 if "%USERNAME%"=="" (
     echo ERROR: Username is required

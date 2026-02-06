@@ -43,7 +43,9 @@ echo Unregistering DLL...
 :: Find and unregister the DLL
 set "DLL_PATH="
 if exist "%~dp0TitanKeyCP.dll" set "DLL_PATH=%~dp0TitanKeyCP.dll"
+if "%DLL_PATH%"=="" if exist "C:\Windows\System32\TitanKeyCP.dll" set "DLL_PATH=C:\Windows\System32\TitanKeyCP.dll"
 if "%DLL_PATH%"=="" if exist "%~dp0build\bin\Release\TitanKeyCP.dll" set "DLL_PATH=%~dp0build\bin\Release\TitanKeyCP.dll"
+if "%DLL_PATH%"=="" if exist "%~dp0build\bin\Debug\TitanKeyCP.dll" set "DLL_PATH=%~dp0build\bin\Debug\TitanKeyCP.dll"
 
 if not "%DLL_PATH%"=="" (
     regsvr32 /u /s "%DLL_PATH%"
@@ -65,7 +67,9 @@ echo Deleting TPM keys...
 :: Find and run reset
 set "EXE_PATH="
 if exist "%~dp0TestTitanKeyCP.exe" set "EXE_PATH=%~dp0TestTitanKeyCP.exe"
+if "%EXE_PATH%"=="" if exist "%~dp0\TestTitanKeyCP.exe" set "EXE_PATH=%~dp0\TestTitanKeyCP.exe"
 if "%EXE_PATH%"=="" if exist "%~dp0build\bin\Release\TestTitanKeyCP.exe" set "EXE_PATH=%~dp0build\bin\Release\TestTitanKeyCP.exe"
+if "%EXE_PATH%"=="" if exist "%~dp0build\bin\Debug\TestTitanKeyCP.exe" set "EXE_PATH=%~dp0build\bin\Debug\TestTitanKeyCP.exe"
 
 if not "%EXE_PATH%"=="" (
     "%EXE_PATH%" --reset >nul 2>&1
