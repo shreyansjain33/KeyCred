@@ -28,10 +28,12 @@ set "EXE_PATH="
 
 :: Check current folder first, then build folder
 if exist "%~dp0TitanKeyCP.dll" set "DLL_PATH=%~dp0TitanKeyCP.dll"
+if "%DLL_PATH%"=="" if exist "C:\Windows\System32\TitanKeyCP.dll" set "DLL_PATH=C:\Windows\System32\TitanKeyCP.dll"
 if "%DLL_PATH%"=="" if exist "%~dp0build\bin\Release\TitanKeyCP.dll" set "DLL_PATH=%~dp0build\bin\Release\TitanKeyCP.dll"
 if "%DLL_PATH%"=="" if exist "%~dp0build\bin\Debug\TitanKeyCP.dll" set "DLL_PATH=%~dp0build\bin\Debug\TitanKeyCP.dll"
 
 if exist "%~dp0TestTitanKeyCP.exe" set "EXE_PATH=%~dp0TestTitanKeyCP.exe"
+if "%EXE_PATH%"=="" if exist "%~dp0\TestTitanKeyCP.exe" set "EXE_PATH=%~dp0\TestTitanKeyCP.exe"
 if "%EXE_PATH%"=="" if exist "%~dp0build\bin\Release\TestTitanKeyCP.exe" set "EXE_PATH=%~dp0build\bin\Release\TestTitanKeyCP.exe"
 if "%EXE_PATH%"=="" if exist "%~dp0build\bin\Debug\TestTitanKeyCP.exe" set "EXE_PATH=%~dp0build\bin\Debug\TestTitanKeyCP.exe"
 
@@ -39,7 +41,7 @@ if "%DLL_PATH%"=="" (
     echo ERROR: TitanKeyCP.dll not found
     echo.
     echo Please build the project first, or copy the DLL here.
-    echo Expected location: build\bin\Release\TitanKeyCP.dll
+    echo Expected location: C:\Windows\System32\TitanKeyCP.dll
     echo.
     pause
     exit /b 1
@@ -49,7 +51,7 @@ if "%EXE_PATH%"=="" (
     echo ERROR: TestTitanKeyCP.exe not found
     echo.
     echo Please build the project first, or copy the EXE here.
-    echo Expected location: build\bin\Release\TestTitanKeyCP.exe
+    echo Expected location: <cloned repo>\TestTitanKeyCP.exe
     echo.
     pause
     exit /b 1

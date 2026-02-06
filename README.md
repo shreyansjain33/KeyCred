@@ -119,10 +119,11 @@ cmake --build . --config Release
 ### Quick Install (Recommended)
 
 1. **Build** the project (see Building section) or download from [Releases](../../releases)
-2. **Run** `Install.bat` as Administrator
+2. **Copy** the downloaded `.dll` file into `C:\Windows\System32\` directory and the `.exe` file into the project folder.
+3. **Run** `Install.bat` as Administrator
 
 That's it! The installer will:
-- Find the built DLL and EXE in the `build/` folder
+- Find the built DLL and EXE in the folders
 - Enroll your Titan Key (touch when it blinks)
 - Create TPM-protected encryption
 - Register the credential provider
@@ -141,12 +142,13 @@ This lets you test USB communication with your Titan Key before full installatio
 
 1. Lock your workstation (`Win + L`)
 2. Click on "Titan Key Login" tile
-3. Touch your security key when it blinks
-4. Done! You're logged in.
+3. Click on the Sign In button
+4. Touch your security key when it blinks
+5. Done! You're logged in.
 
 ### Switching to Password
 
-If your Titan Key isn't available, simply click on your user tile to use password login instead.
+If your Titan Key isn't available, simply click on your pin or password tile to use alternate login methods instead.
 
 ### Available Commands
 
