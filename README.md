@@ -97,7 +97,7 @@ The project includes a GitHub Actions workflow that builds release binaries:
 
 ```powershell
 # Clone the repository
-git clone https://github.com/yourusername/KeyCred.git
+git clone https://github.com/shreyansjain33/KeyCred.git
 cd KeyCred
 
 # Create build directory
@@ -119,8 +119,8 @@ cmake --build . --config Release
 ### Quick Install (Recommended)
 
 1. **Build** the project (see Building section) or download from [Releases](../../releases)
-2. **Copy** the downloaded `.dll` file into `C:\Windows\System32\` directory and the `.exe` file into the project folder.
-3. **Run** `Install.bat` as Administrator
+2. **Copy** the downloaded `TitanKeyCP.dll` file into `C:\Windows\System32\` directory and the `TestTitanKeyCP.exe` file into the project folder.
+3. **Run** `Install.bat` as **Administrator**
 
 That's it! The installer will:
 - Find the built DLL and EXE in the folders
