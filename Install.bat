@@ -5,6 +5,9 @@
 
 setlocal enabledelayedexpansion
 
+:: Run from the script's directory so paths resolve correctly
+cd /d "%~dp0"
+
 echo.
 echo =====================================================
 echo  Titan Key Credential Provider - Complete Installer
@@ -66,7 +69,7 @@ echo.
 echo STEP 1: Enter your Windows credentials
 echo ----------------------------------------
 echo.
-echo * Username should match the user directory name present here: C:\Users\<username>
+echo * Username should match the user directory name in C:\Users\
 echo * If logged-in using Microsoft account, then use the Microsoft Account's password.
 echo.
 set /p USERNAME="Windows Username: "
@@ -91,7 +94,7 @@ echo.
 echo When your Titan Key blinks, TOUCH IT to enroll.
 echo.
 
-"%EXE_PATH%" --setup --user %USERNAME% --password %PASSWORD%
+"%EXE_PATH%" --setup --user "%USERNAME%" --password "%PASSWORD%"
 
 if %errorlevel% neq 0 (
     echo.
@@ -119,7 +122,7 @@ echo.
 :: Step 4: Set Titan Key as default sign-in (instead of PIN/password)
 echo STEP 4: Setting Titan Key as default sign-in option
 echo ----------------------------------------
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DefaultCredentialProvider /t REG_SZ /d "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}" /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DefaultCredentialProvider /t REG_SZ /d "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}" /f
 if %errorlevel% equ 0 (
     echo Default sign-in set to Titan Key.
 ) else (
