@@ -224,11 +224,23 @@ IFACEMETHODIMP TitanKeyCredentialProvider::GetCredentialCount(
     }
 
     *pdwCount = (DWORD)m_credentials.size();
-    *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
-    *pbAutoLogonWithDefault = FALSE;
+    // Make Titan Key the default sign-in option (first tile selected, auto-submit when default)
+    if (!m_credentials.empty()) {
+        *pdwDefault = 0;
+        *pbAutoLogonWithDefault = TRUE;
+    } else {
+        *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
+        *pbAutoLogonWithDefault = FALSE;
+    }
 
     TITAN_LOG(L"Credential count returned");
     return S_OK;
+}
+
+void TitanKeyCredentialProvider::NotifyCredentialsChanged() {
+    if (m_events) {
+        m_events->CredentialsChanged(m_adviseContext);
+    }
 }
 
 IFACEMETHODIMP TitanKeyCredentialProvider::GetCredentialAt(

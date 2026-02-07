@@ -43,14 +43,15 @@ END
 
 //
 // Tile Image (48x48 bitmap)
-// 
-// Note: For a real deployment, replace this with an actual bitmap resource.
-// The credential provider will create a placeholder if this resource is not found.
 //
-// To add a custom image:
-// 1. Create a 48x48 BMP file named "tile.bmp"
-// 2. Uncomment the line below:
-// IDB_TILE_IMAGE BITMAP "tile.bmp"
+// The DLL draws a default icon programmatically (shield + security key).
+// To use a custom image instead:
+// 1. Create a 48x48 BMP or ICO and add to this RC, e.g.:
+//    IDB_TILE_IMAGE BITMAP "res/tile.bmp"
+// 2. In TitanKeyCredential.cpp GetBitmapValue(), load the resource instead of drawing.
 //
-// Or embed the image using this format:
-// 100 BITMAP "path/to/your/titan_key_icon.bmp"
+// Suggested icon styles (search for "security key", "FIDO2", "hardware key" at 48x48):
+// - Shield with key or lock (e.g. Flaticon, Icons8, thenounproject.com)
+// - USB key / hardware security key silhouette
+// - Google Titan Key style: key-shaped body with gold circle (touch)
+// - Windows-style: flat, clear at small size, works on dark and light tiles

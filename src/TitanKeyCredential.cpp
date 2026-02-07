@@ -180,9 +180,14 @@ IFACEMETHODIMP TitanKeyCredential::SetSelected(BOOL* pbAutoLogon) {
     TITAN_LOG(L"TitanKeyCredential::SetSelected");
 
     if (pbAutoLogon) {
-        // Auto-trigger authentication when tile is selected
+        // Auto-trigger authentication when tile is selected (skip separate Sign In click)
         // CTAP2 direct HID is cancellable, so switching tiles will work
         *pbAutoLogon = TRUE;
+    }
+
+    // Notify LogonUI so it may immediately call GetSerialization -> Connect (start verification)
+    if (m_provider) {
+        m_provider->NotifyCredentialsChanged();
     }
 
     return S_OK;
@@ -279,7 +284,7 @@ IFACEMETHODIMP TitanKeyCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbm
     *phbmp = nullptr;
 
     if (dwFieldID == TKFI_TILEIMAGE) {
-        // Create a security key icon programmatically
+        // 48x48 tile icon: shield + security key (FIDO2 style)
         const int SIZE = 48;
         
         HDC hdcScreen = GetDC(nullptr);
@@ -289,39 +294,41 @@ IFACEMETHODIMP TitanKeyCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbm
         if (*phbmp) {
             HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, *phbmp);
             
-            // Background - dark blue gradient
-            HBRUSH hBrushBg = CreateSolidBrush(RGB(30, 60, 114));
+            // Background - rounded square, dark blue
+            HBRUSH hBrushBg = CreateSolidBrush(RGB(26, 46, 82));
             RECT rcBg = {0, 0, SIZE, SIZE};
             FillRect(hdcMem, &rcBg, hBrushBg);
             DeleteObject(hBrushBg);
             
-            // Draw USB key body (rounded rectangle)
-            HBRUSH hBrushKey = CreateSolidBrush(RGB(70, 130, 180));  // Steel blue
-            HPEN hPenOutline = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-            HBRUSH hOldBrush = (HBRUSH)SelectObject(hdcMem, hBrushKey);
-            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenOutline);
+            // Shield shape (simplified as rounded rect) - security/trust
+            HBRUSH hBrushShield = CreateSolidBrush(RGB(52, 73, 94));
+            HPEN hPenShield = CreatePen(PS_SOLID, 1, RGB(149, 165, 166));
+            HBRUSH hOldBrush = (HBRUSH)SelectObject(hdcMem, hBrushShield);
+            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenShield);
+            RoundRect(hdcMem, 6, 4, 42, 38, 6, 6);
             
-            // Key body
-            RoundRect(hdcMem, 8, 14, 40, 34, 4, 4);
+            // Key body (USB security key) - steel blue
+            HBRUSH hBrushKey = CreateSolidBrush(RGB(46, 134, 171));
+            SelectObject(hdcMem, hBrushKey);
+            RoundRect(hdcMem, 12, 16, 36, 30, 3, 3);
+            DeleteObject(hBrushKey);
             
-            // USB connector
-            HBRUSH hBrushUSB = CreateSolidBrush(RGB(192, 192, 192));  // Silver
+            // Touch circle (gold) - "touch to sign in"
+            HBRUSH hBrushTouch = CreateSolidBrush(RGB(241, 196, 15));
+            SelectObject(hdcMem, hBrushTouch);
+            Ellipse(hdcMem, 18, 18, 30, 30);
+            DeleteObject(hBrushTouch);
+            
+            // USB connector (silver) on right
+            HBRUSH hBrushUSB = CreateSolidBrush(RGB(189, 195, 199));
             SelectObject(hdcMem, hBrushUSB);
-            Rectangle(hdcMem, 36, 18, 44, 30);
+            Rectangle(hdcMem, 34, 20, 40, 26);
             DeleteObject(hBrushUSB);
             
-            // Key hole / button (circle)
-            HBRUSH hBrushHole = CreateSolidBrush(RGB(255, 215, 0));  // Gold - indicates touch
-            SelectObject(hdcMem, hBrushHole);
-            Ellipse(hdcMem, 14, 18, 26, 30);
-            DeleteObject(hBrushHole);
-            
-            // Cleanup
             SelectObject(hdcMem, hOldBrush);
             SelectObject(hdcMem, hOldPen);
-            DeleteObject(hBrushKey);
-            DeleteObject(hPenOutline);
-            
+            DeleteObject(hBrushShield);
+            DeleteObject(hPenShield);
             SelectObject(hdcMem, hOldBmp);
         }
         
@@ -609,17 +616,35 @@ HRESULT TitanKeyCredential::PerformAuthentication(IQueryContinueWithStatus* pqcw
 
     TITAN_LOG(L"Credential data verified");
 
-    // Update status
-    if (pqcws) {
-        pqcws->SetStatusMessage(L"Looking for security key...");
+    // Wait for Titan key to be present (poll until found or user cancels)
+    const DWORD waitIntervalMs = 2000;
+    const DWORD maxWaitMs = 120000;  // 2 minutes
+    DWORD elapsed = 0;
+
+    while (elapsed < maxWaitMs) {
+        if (pqcws) {
+            pqcws->SetStatusMessage(L"Insert your security key...");
+        }
+        if (m_events) {
+            m_events->SetFieldString(static_cast<ICredentialProviderCredential*>(static_cast<ICredentialProviderCredential2*>(this)), TKFI_STATUS, L"Insert your security key...");
+        }
+
+        hr = m_ctap2.Initialize();
+        if (SUCCEEDED(hr)) {
+            break;
+        }
+
+        if (pqcws && pqcws->QueryContinue() != S_OK) {
+            TITAN_LOG(L"User cancelled while waiting for key");
+            return E_ABORT;
+        }
+
+        Sleep(waitIntervalMs);
+        elapsed += waitIntervalMs;
     }
 
-    // Initialize CTAP2 direct HID communication
-    // This bypasses Windows WebAuthn service and works on secure desktop
-    TITAN_LOG(L"Initializing CTAP2 direct HID...");
-    hr = m_ctap2.Initialize();
     if (FAILED(hr)) {
-        TITAN_LOG_HR(L"CTAP2 Initialize failed", hr);
+        TITAN_LOG_HR(L"CTAP2 Initialize failed after wait", hr);
         if (pqcws) {
             std::wstring errMsg = L"Security key not found: ";
             errMsg += m_ctap2.GetLastErrorDescription();

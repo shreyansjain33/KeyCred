@@ -127,6 +127,7 @@ That's it! The installer will:
 - Enroll your Titan Key (touch when it blinks)
 - Create TPM-protected encryption
 - Register the credential provider
+- Set Titan Key as the **default** sign-in option (instead of PIN/password)
 
 ### Testing Without Installing
 
@@ -141,9 +142,9 @@ This lets you test USB communication with your Titan Key before full installatio
 ### Daily Use
 
 1. Lock your workstation (`Win + L`)
-2. Click on "Titan Key Login" tile
-3. Click on the Sign In button
-4. Touch your security key when it blinks
+2. The **Titan Key** tile is the default sign-in option. Click it (or it may already be selected).
+3. Verification starts automatically—no separate "Sign In" button. If the key is not plugged in, plug it in and wait; the screen will detect it and continue.
+4. Touch your security key when it blinks.
 5. Done! You're logged in.
 
 ### Switching to Password
@@ -184,6 +185,14 @@ Options:
 
 - Verify DLL is registered: `regsvr32 TitanKeyCP.dll`
 - Check registry: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}`
+
+### Custom tile icon
+
+The lock screen shows a programmatic icon (shield + security key). To use your own 48×48 image:
+
+- Add a 48×48 BMP under `res/` and reference it in `res/TitanKeyCP.rc` as `IDB_TILE_IMAGE`.
+- In `TitanKeyCredential.cpp`, `GetBitmapValue(TKFI_TILEIMAGE)` can load that resource instead of drawing.
+- Good icon styles: shield with key, USB security key silhouette, or FIDO2-style key with touch circle (e.g. search "security key" or "FIDO2" on Flaticon, Icons8, or The Noun Project at 48×48).
 
 ### Debug Logging
 

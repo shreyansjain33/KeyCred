@@ -116,16 +116,28 @@ if %errorlevel% neq 0 (
 echo DLL registered successfully!
 echo.
 
+:: Step 4: Set Titan Key as default sign-in (instead of PIN/password)
+echo STEP 4: Setting Titan Key as default sign-in option
+echo ----------------------------------------
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DefaultCredentialProvider /t REG_SZ /d "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}" /f >nul 2>&1
+if %errorlevel% equ 0 (
+    echo Default sign-in set to Titan Key.
+) else (
+    echo Note: Could not set default provider via policy. Titan Key tile will still appear; select it to sign in.
+)
+echo.
+
 echo =====================================================
 echo  INSTALLATION COMPLETE!
 echo =====================================================
 echo.
-echo Your Titan Key is now set up for Windows login.
+echo Your Titan Key is now set up as the default Windows sign-in.
 echo.
-echo To test:
+echo To sign in:
 echo   1. Lock your workstation: Win + L
-echo   2. Select the "Titan Key Login" tile
-echo   3. Touch your Titan Key when it blinks
+echo   2. The Titan Key tile is selected by default; verification starts automatically.
+echo   3. If the key is not plugged in, plug it in and wait - it will be detected.
+echo   4. Touch your Titan Key when it blinks to complete sign-in.
 echo.
 echo To uninstall later, run: Uninstall.bat
 echo.

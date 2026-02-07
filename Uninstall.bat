@@ -53,6 +53,9 @@ if not "%DLL_PATH%"=="" (
 
 echo Removing registry entries...
 
+:: Remove default credential provider policy (revert to Windows default e.g. PIN)
+reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DefaultCredentialProvider /f >nul 2>&1
+
 :: Remove credential provider registration
 set "CLSID={A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\%CLSID%" /f >nul 2>&1

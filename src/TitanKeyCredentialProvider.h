@@ -74,6 +74,9 @@ public:
     // ICredentialProviderSetUserArray
     IFACEMETHODIMP SetUserArray(ICredentialProviderUserArray* users) override;
 
+    // Notify LogonUI that credentials changed (e.g. after tile selection to trigger Connect)
+    void NotifyCredentialsChanged();
+
 private:
     // Helper to create credentials for users with stored Titan Key credentials
     HRESULT CreateCredentialsForUsers();
